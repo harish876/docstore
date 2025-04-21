@@ -9,3 +9,6 @@ db_bench
 leveldbutil
 .cache
 writeSec
+build*
+without_bloom
+with_bloom

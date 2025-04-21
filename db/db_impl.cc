@@ -128,7 +128,7 @@ DBImpl::DBImpl(const Options &raw_options, const std::string &dbname)
       owns_cache_(options_.block_cache != raw_options.block_cache),
       dbname_(dbname), db_lock_(NULL), shutting_down_(NULL), bg_cv_(&mutex_),
       // SECONDARY MEMTABLE
-      mem_(new MemTable(internal_comparator_, raw_options.secondaryAtt)),
+      mem_(new MemTable(internal_comparator_, raw_options.secondary_key)),
 
       imm_(NULL), logfile_(NULL), logfile_number_(0), log_(NULL), seed_(0),
       tmp_batch_(new WriteBatch), bg_compaction_scheduled_(false),
@@ -410,7 +410,7 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, VersionEdit *edit,
 
     if (mem == NULL) {
       // SECONDARY MEMTABLE
-      mem = new MemTable(internal_comparator_, this->options_.secondaryAtt);
+      mem = new MemTable(internal_comparator_, this->options_.secondary_key);
       mem->Ref();
     }
     status = WriteBatchInternal::InsertInto(&batch, mem);
@@ -1229,7 +1229,7 @@ Status DBImpl::Get(const ReadOptions &options, const Slice &skey,
       // iostat.print();
 
       s = current->Get(options, lkey, value, &stats,
-                       this->options_.secondaryAtt, kNoOfOutputs,
+                       this->options_.secondary_key, kNoOfOutputs,
                        &resultSetofKeysFound, this);
 
       // iostat.print();
@@ -1262,10 +1262,9 @@ Status DBImpl::Get(const ReadOptions &options, const Slice &skey,
   return s;
 }
 
-Status DBImpl::RangeLookUp(const ReadOptions &options, const Slice &startSkey,
-                           const Slice &endSkey,
-                           std::vector<SKeyReturnVal> *value,
-                           int kNoOfOutputs) {
+Status DBImpl::RangeGet(const ReadOptions &options, const Slice &startSkey,
+                        const Slice &endSkey, std::vector<SKeyReturnVal> *value,
+                        int kNoOfOutputs) {
   Status s;
   MutexLock l(&mutex_);
   SequenceNumber snapshot;
@@ -1305,12 +1304,12 @@ Status DBImpl::RangeLookUp(const ReadOptions &options, const Slice &startSkey,
       if (this->options_.IntervalTreeFileName.empty())
         s = current->EmbeddedRangeLookUp(
             options, startSkey.ToString(), endSkey.ToString(), value, &stats,
-            this->options_.secondaryAtt, kNoOfOutputs, &resultSetofKeysFound,
+            this->options_.secondary_key, kNoOfOutputs, &resultSetofKeysFound,
             this, snapshot);
       else
         s = current->RangeLookUp(options, startSkey.ToString(),
                                  endSkey.ToString(), value, &stats,
-                                 this->options_.secondaryAtt, kNoOfOutputs,
+                                 this->options_.secondary_key, kNoOfOutputs,
                                  &resultSetofKeysFound, this, snapshot);
     }
     mutex_.Lock();
@@ -1364,12 +1363,12 @@ Status DBImpl::Put(const WriteOptions &o, const Slice &key, const Slice &val) {
 // attribute
 Status DBImpl::Put(const WriteOptions &o, const Slice &val) {
 
-  if (this->options_.PrimaryAtt.empty())
+  if (this->options_.primary_key.empty())
     return Status::InvalidArgument("Primary Attribute Not Set");
   rapidjson::Document docToParse;
 
   docToParse.Parse<0>(val.ToString().c_str());
-  const char *pKeyAtt = this->options_.PrimaryAtt.c_str();
+  const char *pKeyAtt = this->options_.primary_key.c_str();
 
   if (!docToParse.IsObject() || !docToParse.HasMember(pKeyAtt) ||
       docToParse[pKeyAtt].IsNull())
@@ -1405,7 +1404,7 @@ Status DBImpl::Put(const WriteOptions &o, const Slice &val) {
   }
 
   // Slice key = pKey.str();
-  docToParse.RemoveMember(this->options_.PrimaryAtt.c_str());
+  docToParse.RemoveMember(this->options_.primary_key.c_str());
   rapidjson::StringBuffer strbuf;
   rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
   docToParse.Accept(writer);
@@ -1592,7 +1591,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       imm_ = mem_;
       has_imm_.Release_Store(imm_);
       // SECONDARY MEMTABLE
-      mem_ = new MemTable(internal_comparator_, this->options_.secondaryAtt);
+      mem_ = new MemTable(internal_comparator_, this->options_.secondary_key);
       mem_->Ref();
       force = false; // Do not force another compaction if have room
       MaybeScheduleCompaction();
