@@ -13,7 +13,7 @@ option(LEVELDB_DEBUG "Debug mode with full line-level debugging symbols" OFF)
 option(LEVELDB_PROFILE "Profiling mode: optimized with debugging symbols" OFF)
 option(LEVELDB_BUILD_TESTS "Build LevelDB's unit tests" OFF)
 option(LEVELDB_BUILD_BENCHMARKS "Build LevelDB's benchmarks" OFF)
-option(LEVELDB_HTTP_SERVER "Build HTTP server for LevelDB" ON)
+option(LEVELDB_HTTP_SERVER "Build HTTP server for LevelDB" OFF)
 include(GNUInstallDirs)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
