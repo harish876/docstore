@@ -1164,14 +1164,14 @@ Status DBImpl::Get(const ReadOptions &options, const Slice &key,
   current->Unref();
   return s;
 }
-static bool NewestFirst(const leveldb::SKeyReturnVal &a,
-                        const leveldb::SKeyReturnVal &b) {
+static bool NewestFirst(const leveldb::SecondayKeyReturnVal &a,
+                        const leveldb::SecondayKeyReturnVal &b) {
   return a.sequence_number < b.sequence_number ? false : true;
 }
 
 // New Get method implementation for read on secondary key
 Status DBImpl::Get(const ReadOptions &options, const Slice &skey,
-                   std::vector<SKeyReturnVal> *value, int kNoOfOutputs) {
+                   std::vector<SecondayKeyReturnVal> *value, int kNoOfOutputs) {
   // ofstream outputFile;
   // outputFile.open("/Users/nakshikatha/Desktop/test codes/debug3.txt");
   Status s;
@@ -1263,7 +1263,8 @@ Status DBImpl::Get(const ReadOptions &options, const Slice &skey,
 }
 
 Status DBImpl::RangeGet(const ReadOptions &options, const Slice &startSkey,
-                        const Slice &endSkey, std::vector<SKeyReturnVal> *value,
+                        const Slice &endSkey,
+                        std::vector<SecondayKeyReturnVal> *value,
                         int kNoOfOutputs) {
   Status s;
   MutexLock l(&mutex_);

@@ -270,7 +270,7 @@ struct SecSaver {
   const Comparator *ucmp;
   Slice user_key;
   int level;
-  std::vector<SKeyReturnVal> *value;
+  std::vector<SecondayKeyReturnVal> *value;
   std::unordered_set<std::string> *resultSetofKeysFound;
 };
 struct RangeSecSaver {
@@ -279,7 +279,7 @@ struct RangeSecSaver {
   Slice start_user_key;
   Slice end_user_key;
   int level;
-  std::vector<SKeyReturnVal> *value;
+  std::vector<SecondayKeyReturnVal> *value;
   std::unordered_set<std::string> *resultSetofKeysFound;
 };
 } // namespace
@@ -370,7 +370,7 @@ static bool SecSaveValue(void *arg, const Slice &ikey, const Slice &v,
 
       if (s->state == kFound) {
 
-        struct SKeyReturnVal newVal;
+        struct SecondayKeyReturnVal newVal;
 
         Slice ukey = ExtractUserKey(ikey);
 
@@ -452,7 +452,7 @@ static bool RangeSecSaveValue(void *arg, const Slice &ikey, const Slice &v,
         //        s->end_user_key.ToString()<<" -> "<< Key.ToString() <<endl;
 
         // cout<<"In Range 2\n";
-        struct SKeyReturnVal newVal;
+        struct SecondayKeyReturnVal newVal;
         Slice ukey = ExtractUserKey(ikey);
         {
           newVal.key = ukey.ToString(); // Slice(d);
@@ -496,7 +496,8 @@ static bool RangeSecSaveValue(void *arg, const Slice &ikey, const Slice &v,
 static bool NewestFirst(FileMetaData *a, FileMetaData *b) {
   return a->number > b->number;
 }
-static bool NewestFirstSequenceNumber(SKeyReturnVal a, SKeyReturnVal b) {
+static bool NewestFirstSequenceNumber(SecondayKeyReturnVal a,
+                                      SecondayKeyReturnVal b) {
   return a.sequence_number > b.sequence_number;
 }
 
@@ -746,7 +747,7 @@ Status Version::Get(const ReadOptions &options, const LookupKey &k,
 }
 
 Status Version::Get(const ReadOptions &options, const LookupKey &k,
-                    std::vector<SKeyReturnVal> *value, GetStats *stats,
+                    std::vector<SecondayKeyReturnVal> *value, GetStats *stats,
                     string secKey, int kNoOfOutputs,
                     std::unordered_set<std::string> *resultSetofKeysFound,
                     DBImpl *db) {
@@ -841,7 +842,7 @@ Status Version::Get(const ReadOptions &options, const LookupKey &k,
 
 Status Version::EmbeddedRangeLookUp(
     const ReadOptions &options, std::string startk, std::string endk,
-    std::vector<SKeyReturnVal> *value, GetStats *stats, string secKey,
+    std::vector<SecondayKeyReturnVal> *value, GetStats *stats, string secKey,
     int kNoOfOutputs, std::unordered_set<std::string> *resultSetofKeysFound,
     DBImpl *db, SequenceNumber snapshot) {
 
@@ -927,7 +928,8 @@ Status Version::EmbeddedRangeLookUp(
       //	      saver.value = value;
       //	      saver.resultSetofKeysFound = resultSetofKeysFound;
       //	      s = vset_->table_cache_->Get(options, f->number,
-      //f->file_size, 	                                   ikey, &saver, &SecSaveValue, secKey,kNoOfOutputs,db);
+      // f->file_size, 	                                   ikey, &saver,
+      // &SecSaveValue, secKey,kNoOfOutputs,db);
 
       RangeSecSaver saver;
       saver.state = kNotFound;
@@ -961,7 +963,7 @@ Status Version::EmbeddedRangeLookUp(
 }
 Status
 Version::RangeLookUp(const ReadOptions &options, std::string startk,
-                     std::string endk, std::vector<SKeyReturnVal> *value,
+                     std::string endk, std::vector<SecondayKeyReturnVal> *value,
                      GetStats *stats, string secKey, int kNoOfOutputs,
                      std::unordered_set<std::string> *resultSetofKeysFound,
                      DBImpl *db, SequenceNumber snapshot) {

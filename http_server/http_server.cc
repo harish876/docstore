@@ -162,7 +162,7 @@ int main(int argc, char *argv[]) {
                                 "{\"error\": \"Missing 'key' parameter\"}");
         }
 
-        std::vector<leveldb::SKeyReturnVal> results;
+        std::vector<leveldb::SecondayKeyReturnVal> results;
         leveldb::Status s =
             db_to_use->Get(leveldb::ReadOptions(),
                            leveldb::Slice(secondary_key), &results, limit);
@@ -211,18 +211,6 @@ int main(int argc, char *argv[]) {
           return crow::response(500, "{\"error\": \"" + error + "\"}");
         }
       });
-
-  // Add a new endpoint for stats/comparison
-  CROW_ROUTE(app, "/db/stats")
-      .methods("GET"_method)(
-          [db_with_bloom, db_without_bloom](const crow::request &req) {
-            // This would be expanded in a real implementation
-            // to return performance statistics, etc.
-            crow::json::wvalue stats;
-            stats["bloom_filter_enabled"]["status"] = "active";
-            stats["no_bloom_filter"]["status"] = "active";
-            return crow::response(200, stats);
-          });
 
   // Bulk insertion endpoint
   CROW_ROUTE(app, "/db/bulk-insert")
@@ -332,7 +320,7 @@ int main(int argc, char *argv[]) {
         {
           auto startWithBloom = std::chrono::high_resolution_clock::now();
 
-          std::vector<leveldb::SKeyReturnVal> values;
+          std::vector<leveldb::SecondayKeyReturnVal> values;
           leveldb::ReadOptions roptions;
           db_with_bloom->Get(roptions,
                              leveldb::Slice(std::to_string(targetAge)), &values,
@@ -351,7 +339,7 @@ int main(int argc, char *argv[]) {
         {
           auto startNoBloom = std::chrono::high_resolution_clock::now();
 
-          std::vector<leveldb::SKeyReturnVal> values;
+          std::vector<leveldb::SecondayKeyReturnVal> values;
           leveldb::ReadOptions roptions;
           db_without_bloom->Get(roptions,
                                 leveldb::Slice(std::to_string(targetAge)),
@@ -441,7 +429,7 @@ int main(int argc, char *argv[]) {
         }
 
         // Set up result containers
-        std::vector<leveldb::SKeyReturnVal> results;
+        std::vector<leveldb::SecondayKeyReturnVal> results;
         std::unordered_set<std::string> result_set;
 
         // Track performance

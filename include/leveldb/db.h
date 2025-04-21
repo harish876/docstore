@@ -39,20 +39,22 @@ struct Range {
   Range(const Slice &s, const Slice &l) : start(s), limit(l) {}
 };
 
-struct SKeyReturnVal {
+struct SecondayKeyReturnVal {
   std::string key;
   std::string value;
   uint64_t sequence_number;
-  static bool comp(const leveldb::SKeyReturnVal &a,
-                   const leveldb::SKeyReturnVal &b) {
+  static bool comp(const leveldb::SecondayKeyReturnVal &a,
+                   const leveldb::SecondayKeyReturnVal &b) {
     return a.sequence_number < b.sequence_number ? false : true;
   }
-  void Push(vector<leveldb::SKeyReturnVal> *heap, leveldb::SKeyReturnVal val) {
+  void Push(vector<leveldb::SecondayKeyReturnVal> *heap,
+            leveldb::SecondayKeyReturnVal val) {
     heap->push_back(val);
     push_heap(heap->begin(), heap->end(), comp);
   }
-  leveldb::SKeyReturnVal Pop(vector<leveldb::SKeyReturnVal> *heap) {
-    leveldb::SKeyReturnVal val = heap->front();
+  leveldb::SecondayKeyReturnVal
+  Pop(vector<leveldb::SecondayKeyReturnVal> *heap) {
+    leveldb::SecondayKeyReturnVal val = heap->front();
 
     // This operation will move the smallest element to the end of the vector
     pop_heap(heap->begin(), heap->end(), comp);
@@ -108,12 +110,13 @@ public:
 
   // New Get method for query on secondary Key
   virtual Status Get(const ReadOptions &options, const Slice &skey,
-                     std::vector<SKeyReturnVal> *value, int kNoOfOutputs) = 0;
+                     std::vector<SecondayKeyReturnVal> *value,
+                     int kNoOfOutputs) = 0;
 
   // Lookup range query on secondary key
   virtual Status RangeGet(const ReadOptions &options, const Slice &startSkey,
                           const Slice &endSkey,
-                          std::vector<SKeyReturnVal> *value,
+                          std::vector<SecondayKeyReturnVal> *value,
                           int kNoOfOutputs) = 0;
 
   // This function checks if this key exists in level 0 to l-1 / memtable
