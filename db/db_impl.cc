@@ -1301,7 +1301,7 @@ Status DBImpl::RangeGet(const ReadOptions &options, const Slice &startSkey,
     }
 
     if (kNoOfOutputs > (int)(value->size())) {
-      if (this->options_.IntervalTreeFileName.empty())
+      if (this->options_.interval_tree_file_name.empty())
         s = current->EmbeddedRangeLookUp(
             options, startSkey.ToString(), endSkey.ToString(), value, &stats,
             this->options_.secondary_key, kNoOfOutputs, &resultSetofKeysFound,

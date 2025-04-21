@@ -131,7 +131,7 @@ void TableBuilder::Add(const Slice &key, const Slice &value) {
   if (r->pending_index_entry) {
     // cout<<"last key: "<<r->last_key<<endl;
 
-    if (!r->options.IntervalTreeFileName.empty())
+    if (!r->options.interval_tree_file_name.empty())
       intervalTree_->insertInterval(
           SSTR(fileNumber) + "+" +
               r->last_key.substr(0, r->last_key.size() - 8),
@@ -393,7 +393,7 @@ Status TableBuilder::Finish() {
 
   if (ok()) {
     if (r->pending_index_entry) {
-      if (!r->options.IntervalTreeFileName.empty()) {
+      if (!r->options.interval_tree_file_name.empty()) {
         intervalTree_->insertInterval(
             SSTR(fileNumber) + "+" +
                 r->last_key.substr(0, r->last_key.size() - 8),
@@ -439,7 +439,7 @@ Status TableBuilder::Finish() {
 
     // Write index block
 
-    if (r->options.IntervalTreeFileName.empty()) {
+    if (r->options.interval_tree_file_name.empty()) {
       WriteBlock(&r->interval_block, &interval_block_handle);
     }
     WriteBlock(&r->index_block, &index_block_handle);
@@ -450,7 +450,7 @@ Status TableBuilder::Finish() {
     Footer footer;
     footer.set_metaindex_handle(metaindex_block_handle);
     footer.set_index_handle(index_block_handle);
-    bool isinterval = r->options.IntervalTreeFileName.empty();
+    bool isinterval = r->options.interval_tree_file_name.empty();
     if (isinterval) {
       footer.set_interval_handle(interval_block_handle);
     }

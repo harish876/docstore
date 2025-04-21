@@ -151,7 +151,7 @@ struct Options {
   // Create an Options object with default values for all fields.
   string secondary_key;
   string primary_key;
-  string IntervalTreeFileName;
+  string interval_tree_file_name;
   //////////////////Secondary Filter////////////
 
   Options();
