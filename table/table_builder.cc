@@ -18,9 +18,11 @@
 #include <fstream>
 #include <sstream>
 
-#define SSTR(x)                                                                \
-  dynamic_cast<std::ostringstream &>((std::ostringstream() << std::dec << x))  \
-      .str()
+template <typename T> std::string ToString(const T &value) {
+  std::ostringstream oss;
+  oss << std::dec << value;
+  return oss.str();
+}
 namespace leveldb {
 
 struct TableBuilder::Rep {
@@ -133,7 +135,7 @@ void TableBuilder::Add(const Slice &key, const Slice &value) {
 
     if (!r->options.interval_tree_file_name.empty())
       intervalTree_->insertInterval(
-          SSTR(fileNumber) + "+" +
+          ToString(fileNumber) + "+" +
               r->last_key.substr(0, r->last_key.size() - 8),
           r->minSecValue, r->maxSecValue, r->maxSecSeqNumber);
     else {
@@ -395,7 +397,7 @@ Status TableBuilder::Finish() {
     if (r->pending_index_entry) {
       if (!r->options.interval_tree_file_name.empty()) {
         intervalTree_->insertInterval(
-            SSTR(fileNumber) + "+" +
+            ToString(fileNumber) + "+" +
                 r->last_key.substr(0, r->last_key.size() - 8),
             r->minSecValue, r->maxSecValue, r->maxSecSeqNumber);
         intervalTree_->sync();

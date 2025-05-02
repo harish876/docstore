@@ -20,9 +20,11 @@
 #include <fstream>
 #include <sstream>
 #include <stdio.h>
-#define SSTR(x)                                                                \
-  dynamic_cast<std::ostringstream &>((std::ostringstream() << std::dec << x))  \
-      .str()
+template <typename T> std::string ToString(const T &value) {
+  std::ostringstream oss;
+  oss << std::dec << value;
+  return oss.str();
+}
 namespace leveldb {
 
 static const int kTargetFileSize = 2 * 1048576;
@@ -982,7 +984,7 @@ Version::RangeLookUp(const ReadOptions &options, std::string startk,
     for (uint32_t i = 0; i < num_files; ++i) {
 
       filenoToMetaMap.insert(std::pair<std::string, FileMetaData *>(
-          SSTR(files_[level][i]->number), files_[level][i]));
+          ToString(files_[level][i]->number), files_[level][i]));
     }
   }
 
@@ -2079,7 +2081,7 @@ void Compaction::AddInputDeletions(VersionEdit *edit) {
                .empty()) {
         TwoDITwTopK *itree =
             input_version_->vset_->table_cache_->getIntervalTree();
-        itree->deleteAllIntervals(SSTR(inputs_[which][i]->number));
+        itree->deleteAllIntervals(ToString(inputs_[which][i]->number));
         itree->sync();
       }
     }
