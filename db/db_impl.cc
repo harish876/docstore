@@ -1169,13 +1169,9 @@ static bool NewestFirst(const leveldb::SecondayKeyReturnVal &a,
   return a.sequence_number < b.sequence_number ? false : true;
 }
 
-// New Get method implementation for read on secondary key
 Status DBImpl::Get(const ReadOptions &options, const Slice &skey,
                    std::vector<SecondayKeyReturnVal> *value, int kNoOfOutputs) {
-  // ofstream outputFile;
-  // outputFile.open("/Users/nakshikatha/Desktop/test codes/debug3.txt");
   Status s;
-  // outputFile<<"innnn\n";
   MutexLock l(&mutex_);
   SequenceNumber snapshot;
   if (options.snapshot != NULL) {
@@ -1196,59 +1192,28 @@ Status DBImpl::Get(const ReadOptions &options, const Slice &skey,
   bool have_stat_update = false;
   Version::GetStats stats;
 
-  // outputFile<<"in\n";
   //  Unlock while reading from files and memtables
   {
     mutex_.Unlock();
     // First look in the memtable, then in the immutable memtable (if any).
-    // outputFile<<"in\n";
     LookupKey lkey(skey, snapshot);
-    // outputFile<<"in\n";
 
     std::unordered_set<std::string> resultSetofKeysFound;
 
     // SECONDARY MEMTABLE
-    // outputFile<<"memGet\n";
     mem->Get(skey, snapshot, value, &s, &resultSetofKeysFound, kNoOfOutputs);
-    // if(value->size()>kNoOfOutputs)
-    // std::sort(value->begin(), value->end(), NewestFirst);
 
     if (imm != NULL && kNoOfOutputs - value->size() > 0) {
-      // outputFile<<"immGet\n";
-      // int memsize = value->size();
       // SECONDARY MEMTABLE
       imm->Get(skey, snapshot, value, &s, &resultSetofKeysFound, kNoOfOutputs);
-      // if(value->size()>kNoOfOutputs)
-      //  std::sort(value->begin()+memsize, value->end(), NewestFirst);
     }
 
     if (kNoOfOutputs > (int)(value->size())) {
-      // outputFile<<"sstget\n";
-      // Version::iostat.clear();
-
-      // iostat.print();
-
       s = current->Get(options, lkey, value, &stats,
                        this->options_.secondary_key, kNoOfOutputs,
                        &resultSetofKeysFound, this);
-
-      // iostat.print();
-      // outputFile<<"in\n";
     }
-    // outputFile<<kNoOfOutputs;
-    // outputFile<<value->size()<<endl;
-    // have_stat_update = true;
-    /*if(kNoOfOutputs<value->size())
-    {
-        //outputFile<<value->size()<<endl;
-        value->erase(value->begin()+kNoOfOutputs,value->end());
-        //outputFile<<value->size()<<endl;
-    }*/
-
-    // std::sort_heap(value->begin(),value->end(),NewestFirst);
-    // outputFile<<"in\n";
     mutex_.Lock();
-    // outputFile<<"in\n";
   }
 
   if (have_stat_update && current->UpdateStats(stats)) {
@@ -1258,7 +1223,6 @@ Status DBImpl::Get(const ReadOptions &options, const Slice &skey,
   if (imm != NULL)
     imm->Unref();
   current->Unref();
-  // outputFile.close();
   return s;
 }
 
