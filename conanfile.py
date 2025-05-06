@@ -4,13 +4,11 @@ from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
 from conan.tools.files import copy, get, rmdir
 import os
 
-required_conan_version = ">=1.53.0"
-
 class DocstoreConan(ConanFile):
     name = "docstore"
     version = "0.0.1"
     license = "BSD-3-Clause"
-    url = "https://github.com/harish876/docstore"
+    homepage = "https://github.com/harish876/docstore"
     description = "Fork of LevelDB with document store support"
     topics = ("leveldb", "database", "document-store")
     settings = "os", "arch", "compiler", "build_type"

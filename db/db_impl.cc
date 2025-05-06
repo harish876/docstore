@@ -1324,8 +1324,6 @@ Status DBImpl::Put(const WriteOptions &o, const Slice &key, const Slice &val) {
   return DB::Put(o, key, val);
 }
 
-// Custom Put Overload Method for inserting values with key on secondary
-// attribute
 Status DBImpl::Put(const WriteOptions &o, const Slice &val) {
 
   if (this->options_.primary_key.empty())

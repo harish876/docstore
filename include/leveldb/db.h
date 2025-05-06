@@ -7,6 +7,7 @@
 
 #include "leveldb/iterator.h"
 #include "leveldb/options.h"
+#include "nlohmann/json.hpp"
 #include <algorithm>
 #include <stdint.h>
 #include <stdio.h>

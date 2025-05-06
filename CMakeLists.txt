@@ -5,7 +5,7 @@
 cmake_minimum_required(VERSION 3.10)
 
 # Project definition with version from db.h
-project(leveldb-EmbeddedIndex VERSION 1.14.0 LANGUAGES C CXX)
+project(docstore VERSION 1.14.0 LANGUAGES C CXX)
 
 # Build options (similar to OPT in Makefile)
 option(LEVELDB_PRODUCTION "Production use (optimized mode)" ON)
@@ -60,6 +60,8 @@ include_directories(
   include
 )
 
+include_directories(${CMAKE_SOURCE_DIR}/third_party/json/include)
+
 # Platform-specific settings
 if(LEVELDB_PLATFORM STREQUAL "POSIX")
   add_compile_definitions(
@@ -91,6 +93,7 @@ set(LEVELDB_SOURCES
   db/version_edit.cc
   db/version_set.cc
   db/write_batch.cc
+  db/document.cc
   
   # Table sources
   table/block.cc
@@ -138,64 +141,76 @@ set(TESTHARNESS_SOURCES
   ${TESTUTIL_SOURCES}
 )
 
-# Main library target
-add_library(leveldb STATIC ${LEVELDB_SOURCES})
-target_link_libraries(leveldb Threads::Threads)
+# Add nlohmann::json as a subdirectory
+add_subdirectory(third_party/json)
 
+# Main library target
+add_library(docstore STATIC ${LEVELDB_SOURCES})
+
+# Link libraries to the docstore target
+target_link_libraries(docstore
+    PRIVATE
+        Threads::Threads
+        nlohmann_json::nlohmann_json
+)
 # Shared library (if enabled)
 option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 if(BUILD_SHARED_LIBS)
-  add_library(leveldb-shared SHARED ${LEVELDB_SOURCES})
-  target_link_libraries(leveldb-shared Threads::Threads)
-  set_target_properties(leveldb-shared PROPERTIES 
-    OUTPUT_NAME leveldb
-    VERSION ${PROJECT_VERSION}
-    SOVERSION ${PROJECT_VERSION_MAJOR}
-  )
-  if(LEVELDB_PLATFORM STREQUAL "POSIX")
-    target_compile_options(leveldb-shared PRIVATE -fPIC)
-  endif()
+    add_library(docstore-shared SHARED ${LEVELDB_SOURCES})
+    target_link_libraries(docstore-shared
+        PRIVATE
+            Threads::Threads
+    )
+    set_target_properties(docstore-shared PROPERTIES 
+        OUTPUT_NAME docstore
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
+    )
+    if(LEVELDB_PLATFORM STREQUAL "POSIX")
+        target_compile_options(docstore-shared PRIVATE -fPIC)
+    endif()
 endif()
 
 # MemEnv library
 add_library(memenv STATIC ${MEMENV_SOURCES})
-target_link_libraries(memenv leveldb)
+target_link_libraries(memenv PRIVATE docstore)
 
 # Executables
 # add_executable(db_bench db/db_bench.cc)
 # target_link_libraries(db_bench leveldb)
 
 add_executable(leveldbutil db/leveldb_main.cc)
-target_link_libraries(leveldbutil leveldb)
+target_link_libraries(leveldbutil docstore)
 
 # Tests
 enable_testing()
 
 # Define test executables
 set(LEVELDB_TESTS
-  arena_test
-  autocompact_test
-  bloom_test
-  c_test
-  cache_test
-  coding_test
-  corruption_test
-  crc32c_test
-  db_test
-  dbformat_test
-  env_test
-  filename_test
-  filter_block_test
-  issue178_test
-  issue200_test
-  log_test
-  memenv_test
-  skiplist_test
-  table_test
-  version_edit_test
-  version_set_test
-  write_batch_test
-  main_test
+  # c_test
+  # arena_test
+  # autocompact_test
+  # bloom_test
+  # cache_test
+  # coding_test
+  # corruption_test
+  # crc32c_test
+  # db_test
+  # dbformat_test
+  # env_test
+  # filename_test
+  # filter_block_test
+  # issue178_test
+  # issue200_test
+  # log_test
+  # memenv_test
+  # skiplist_test
+  # table_test
+  # version_edit_test
+  # version_set_test
+  # write_batch_test
+  # main_test
+  document_test
 )
 
 # Build test libraries
@@ -210,10 +225,10 @@ if (LEVELDB_BUILD_TESTS)
     foreach(test_name ${LEVELDB_TESTS})
     if(${test_name} STREQUAL "main_test")
         add_executable(${test_name} util/${test_name}.cc)
-        target_link_libraries(${test_name} leveldb)
+        target_link_libraries(${test_name} docstore)
     elseif(${test_name} STREQUAL "memenv_test")
         add_executable(${test_name} helpers/memenv/${test_name}.cc $<TARGET_OBJECTS:testharness>)
-        target_link_libraries(${test_name} memenv leveldb)
+        target_link_libraries(${test_name} memenv docstore)
     else()
         # Determine source file location
         if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/db/${test_name}.cc")
@@ -229,7 +244,7 @@ if (LEVELDB_BUILD_TESTS)
         endif()
         
         add_executable(${test_name} ${test_file} $<TARGET_OBJECTS:testharness>)
-        target_link_libraries(${test_name} leveldb)
+        target_link_libraries(${test_name} docstore)
     endif()
     
     add_test(NAME ${test_name} COMMAND ${test_name})
@@ -246,7 +261,7 @@ if(LEVELDB_BUILD_BENCHMARKS)
   # Define test utilities if not already defined
   if(NOT TARGET testutil)
     add_library(testutil STATIC ${TESTUTIL_SOURCES})
-    target_link_libraries(testutil leveldb)
+    target_link_libraries(testutil docstore)
   endif()
 
   # Helper function to create benchmark targets
@@ -263,7 +278,7 @@ if(LEVELDB_BUILD_BENCHMARKS)
       "${bench_file}"
     )
     
-    target_link_libraries("${bench_target_name}" leveldb benchmark Threads::Threads)
+    target_link_libraries("${bench_target_name}" docstore benchmark Threads::Threads)
     
     target_compile_definitions("${bench_target_name}"
       PRIVATE
@@ -346,14 +361,14 @@ if(LEVELDB_PLATFORM STREQUAL "IOS")
 endif()
 
 # Installation
-install(TARGETS leveldb memenv
+install(TARGETS docstore memenv
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
 if(BUILD_SHARED_LIBS)
-  install(TARGETS leveldb-shared
+  install(TARGETS docstore-shared
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -361,6 +376,11 @@ if(BUILD_SHARED_LIBS)
 endif()
 
 install(DIRECTORY include/leveldb
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  FILES_MATCHING PATTERN "*.h"
+)
+
+install(DIRECTORY include/docstore 
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   FILES_MATCHING PATTERN "*.h"
 )

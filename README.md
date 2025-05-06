@@ -1,4 +1,29 @@
-LevelDB is a fast key-value storage library written at Google that provides an ordered mapping from string keys to string values.
+# DocStore:
+An attempt to build a naive document store over leveldb supporting secondary indexing feature using embedded bloom filters and interval trees. This work builds on top of work done at UC Riverside - [Embedded-LevelDB](https://github.com/UC-Riverside-DatabaseLab/leveldb-EmbeddedIndex).
+
+## Building Project
+1. git clone https://github.com/harish876/docstore
+2. git submodule update --init --recursive
+3. Ensure CMake is installed
+4. Run the below command to generate a build: 
+```bash
+mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release .. && cmake --build .
+```
+
+## Interface Details
+TODO
+
+## Roadmap
+TODO
+
+## Improvements
+TODO
+
+----------------------------------------------------------------------------------------------------------------------------------------------
+Below attached is the documentation of LevelDB.
+# LevelDB:
+A fast key-value storage library written at Google that provides an ordered mapping from string keys to string values.
 
 > **This repository is receiving very limited maintenance. We will only review the following types of changes.**
 >
