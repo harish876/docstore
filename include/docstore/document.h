@@ -35,15 +35,26 @@ public:
   bool Delete(const std::string &collection_name, const std::string &id);
   leveldb::Status Get(const std::string &collection_name, std::string key,
                       std::string &value);
+  leveldb::Status GetSec(const std::string &collection_name,
+                         const std::string &secondary_key,
+                         std::vector<leveldb::SecondayKeyReturnVal> *value,
+                         int top_k = 1000);
+  leveldb::Status RangeGetSec(const std::string &collection_name,
+                              const std::string &secondary_start_key,
+                              const std::string &secondary_end_key,
+                              std::vector<leveldb::SecondayKeyReturnVal> *value,
+                              int top_k = 1000);
 
   // Utility Methods
-  leveldb::Status
-  LoadCollectionFromRegistry(const std::string &collection_name);
+  std::unique_ptr<leveldb::DB> *
+  GetCollectionHandle(const std::string &collection_name, leveldb::Status &s);
 
   // Metadata Helper functions
   leveldb::Status CheckCollectionInRegistry(const string &collection_name);
   leveldb::Status AddCollectionToRegistry(const string &collection_name,
                                           leveldb::Options &options);
+  leveldb::Status
+  LoadCollectionFromRegistry(const std::string &collection_name);
 
 private:
   std::string base_path_;

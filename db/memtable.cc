@@ -8,9 +8,8 @@
 #include "leveldb/comparator.h"
 #include "leveldb/env.h"
 #include "leveldb/iterator.h"
-#include "rapidjson/document.h"
 #include "util/coding.h"
-#include <fstream>
+#include <nlohmann/json.hpp>
 #include <sstream>
 #include <unordered_set>
 
@@ -111,64 +110,47 @@ void MemTable::Add(SequenceNumber s, ValueType type, const Slice &key,
   memcpy(p, value.data(), val_size);
   assert((p + val_size) - buf == encoded_len);
   table_.Insert(buf);
-  ////SECONDARY MEMTABLE
+
+  // Secondary MemTable logic
   if (type == kTypeDeletion)
     return;
-  rapidjson::Document docToParse;
 
-  docToParse.Parse<0>(value.ToString().c_str());
+  nlohmann::json doc;
+  try {
+    doc = nlohmann::json::parse(value.ToString());
+  } catch (const nlohmann::json::parse_error &e) {
+    return;
+  }
 
-  ///
-  const char *sKeyAtt = secAttribute.c_str();
+  const std::string &sKeyAtt = secAttribute;
 
-  if (!docToParse.IsObject() || !docToParse.HasMember(sKeyAtt) ||
-      docToParse[sKeyAtt].IsNull())
+  if (!doc.contains(sKeyAtt) || doc[sKeyAtt].is_null())
     return;
 
   std::ostringstream skey;
-  if (docToParse[sKeyAtt].IsNumber()) {
-    if (docToParse[sKeyAtt].IsUint64()) {
-      unsigned long long int tid = docToParse[sKeyAtt].GetUint64();
-      skey << tid;
-
-    } else if (docToParse[sKeyAtt].IsInt64()) {
-      long long int tid = docToParse[sKeyAtt].GetInt64();
-      skey << tid;
-    } else if (docToParse[sKeyAtt].IsDouble()) {
-      double tid = docToParse[sKeyAtt].GetDouble();
-      skey << tid;
-    }
-
-    else if (docToParse[sKeyAtt].IsUint()) {
-      unsigned int tid = docToParse[sKeyAtt].GetUint();
-      skey << tid;
-    } else if (docToParse[sKeyAtt].IsInt()) {
-      int tid = docToParse[sKeyAtt].GetInt();
-      skey << tid;
-    }
-  } else if (docToParse[sKeyAtt].IsString()) {
-    const char *tid = docToParse[sKeyAtt].GetString();
-    skey << tid;
-  } else if (docToParse[sKeyAtt].IsBool()) {
-    bool tid = docToParse[sKeyAtt].GetBool();
-    skey << tid;
+  if (doc[sKeyAtt].is_number_unsigned()) {
+    skey << doc[sKeyAtt].get<uint64_t>();
+  } else if (doc[sKeyAtt].is_number_integer()) {
+    skey << doc[sKeyAtt].get<int64_t>();
+  } else if (doc[sKeyAtt].is_number_float()) {
+    skey << doc[sKeyAtt].get<double>();
+  } else if (doc[sKeyAtt].is_string()) {
+    skey << doc[sKeyAtt].get<std::string>();
+  } else if (doc[sKeyAtt].is_boolean()) {
+    skey << (doc[sKeyAtt].get<bool>() ? "true" : "false");
   }
 
   std::string secKey = skey.str();
   SecMemTable::const_iterator lookup = secTable_.find(secKey);
   if (lookup == secTable_.end()) {
-
-    vector<string> *invertedList = new vector<string>();
+    auto *invertedList = new std::vector<std::string>();
     invertedList->push_back(key.ToString());
-
     secTable_.insert(std::make_pair(secKey, invertedList));
-  }
-
-  else {
-    pair<string, vector<string> *> pr = *lookup;
-    pr.second->push_back(key.ToString());
+  } else {
+    lookup->second->push_back(key.ToString());
   }
 }
+
 bool MemTable::Get(const LookupKey &key, std::string *value, Status *s) {
   Slice memkey = key.memtable_key();
   Table::Iterator iter(&table_);
@@ -262,44 +244,30 @@ void MemTable::Get(const Slice &skey, SequenceNumber snapshot,
       uint64_t tag;
       if (this->Get(lkey, &svalue, &s, &tag)) {
         if (!s.IsNotFound()) {
-          rapidjson::Document docToParse;
+          nlohmann::json doc;
 
-          docToParse.Parse<0>(svalue.c_str());
+          try {
+            doc = nlohmann::json::parse(svalue);
+          } catch (const nlohmann::json::parse_error &e) {
+            continue;
+          }
 
-          ///
-          const char *sKeyAtt = secAttribute.c_str();
+          const std::string &sKeyAtt = secAttribute;
 
-          if (!docToParse.IsObject() || !docToParse.HasMember(sKeyAtt) ||
-              docToParse[sKeyAtt].IsNull())
-            return;
+          if (!doc.contains(sKeyAtt) || doc[sKeyAtt].is_null())
+            continue;
 
           std::ostringstream tempskey;
-          if (docToParse[sKeyAtt].IsNumber()) {
-            if (docToParse[sKeyAtt].IsUint64()) {
-              unsigned long long int tid = docToParse[sKeyAtt].GetUint64();
-              tempskey << tid;
-
-            } else if (docToParse[sKeyAtt].IsInt64()) {
-              long long int tid = docToParse[sKeyAtt].GetInt64();
-              tempskey << tid;
-            } else if (docToParse[sKeyAtt].IsDouble()) {
-              double tid = docToParse[sKeyAtt].GetDouble();
-              tempskey << tid;
-            }
-
-            else if (docToParse[sKeyAtt].IsUint()) {
-              unsigned int tid = docToParse[sKeyAtt].GetUint();
-              tempskey << tid;
-            } else if (docToParse[sKeyAtt].IsInt()) {
-              int tid = docToParse[sKeyAtt].GetInt();
-              tempskey << tid;
-            }
-          } else if (docToParse[sKeyAtt].IsString()) {
-            const char *tid = docToParse[sKeyAtt].GetString();
-            tempskey << tid;
-          } else if (docToParse[sKeyAtt].IsBool()) {
-            bool tid = docToParse[sKeyAtt].GetBool();
-            tempskey << tid;
+          if (doc[sKeyAtt].is_number_unsigned()) {
+            tempskey << doc[sKeyAtt].get<uint64_t>();
+          } else if (doc[sKeyAtt].is_number_integer()) {
+            tempskey << doc[sKeyAtt].get<int64_t>();
+          } else if (doc[sKeyAtt].is_number_float()) {
+            tempskey << doc[sKeyAtt].get<double>();
+          } else if (doc[sKeyAtt].is_string()) {
+            tempskey << doc[sKeyAtt].get<std::string>();
+          } else if (doc[sKeyAtt].is_boolean()) {
+            tempskey << (doc[sKeyAtt].get<bool>() ? "true" : "false");
           }
 
           Slice valsKey = tempskey.str();
@@ -307,22 +275,17 @@ void MemTable::Get(const Slice &skey, SequenceNumber snapshot,
                                                                 skey) == 0) {
             struct SecondayKeyReturnVal newVal;
             newVal.key = pr.second->at(i);
-            std::string temp;
 
             if (resultSetofKeysFound->find(newVal.key) ==
                 resultSetofKeysFound->end()) {
-
               newVal.value = svalue;
               newVal.sequence_number = tag;
 
               if (value->size() < topKOutput) {
-
                 newVal.Push(value, newVal);
                 resultSetofKeysFound->insert(newVal.key);
-
               } else if (newVal.sequence_number >
                          value->front().sequence_number) {
-
                 newVal.Pop(value);
                 newVal.Push(value, newVal);
                 resultSetofKeysFound->insert(newVal.key);
@@ -339,9 +302,8 @@ void MemTable::Get(const Slice &skey, SequenceNumber snapshot,
 void MemTable::RangeLookUp(
     const Slice &startSkey, const Slice &endSkey, SequenceNumber snapshot,
     std::vector<SecondayKeyReturnVal> *value, Status *s,
-    std::unordered_set<std::string> *resultSetofKeysFound, int topKOutput)
+    std::unordered_set<std::string> *resultSetofKeysFound, int topKOutput) {
 
-{
   auto lookuplb = secTable_.lower_bound(startSkey.ToString());
   auto lookupub = secTable_.upper_bound(endSkey.ToString());
   for (; lookuplb != lookupub; lookuplb++) {
@@ -358,44 +320,31 @@ void MemTable::RangeLookUp(
       uint64_t tag;
       if (this->Get(lkey, &svalue, &s, &tag)) {
         if (!s.IsNotFound()) {
-          rapidjson::Document docToParse;
+          nlohmann::json doc;
 
-          docToParse.Parse<0>(svalue.c_str());
+          try {
+            doc = nlohmann::json::parse(svalue);
+          } catch (const nlohmann::json::parse_error &e) {
+            continue;
+          }
 
-          ///
-          const char *sKeyAtt = secAttribute.c_str();
+          const std::string &sKeyAtt = secAttribute;
 
-          if (!docToParse.IsObject() || !docToParse.HasMember(sKeyAtt) ||
-              docToParse[sKeyAtt].IsNull())
+          // Check if the secondary key attribute exists and is not null
+          if (!doc.contains(sKeyAtt) || doc[sKeyAtt].is_null())
             continue;
 
           std::ostringstream tempskey;
-          if (docToParse[sKeyAtt].IsNumber()) {
-            if (docToParse[sKeyAtt].IsUint64()) {
-              unsigned long long int tid = docToParse[sKeyAtt].GetUint64();
-              tempskey << tid;
-
-            } else if (docToParse[sKeyAtt].IsInt64()) {
-              long long int tid = docToParse[sKeyAtt].GetInt64();
-              tempskey << tid;
-            } else if (docToParse[sKeyAtt].IsDouble()) {
-              double tid = docToParse[sKeyAtt].GetDouble();
-              tempskey << tid;
-            }
-
-            else if (docToParse[sKeyAtt].IsUint()) {
-              unsigned int tid = docToParse[sKeyAtt].GetUint();
-              tempskey << tid;
-            } else if (docToParse[sKeyAtt].IsInt()) {
-              int tid = docToParse[sKeyAtt].GetInt();
-              tempskey << tid;
-            }
-          } else if (docToParse[sKeyAtt].IsString()) {
-            const char *tid = docToParse[sKeyAtt].GetString();
-            tempskey << tid;
-          } else if (docToParse[sKeyAtt].IsBool()) {
-            bool tid = docToParse[sKeyAtt].GetBool();
-            tempskey << tid;
+          if (doc[sKeyAtt].is_number_unsigned()) {
+            tempskey << doc[sKeyAtt].get<uint64_t>();
+          } else if (doc[sKeyAtt].is_number_integer()) {
+            tempskey << doc[sKeyAtt].get<int64_t>();
+          } else if (doc[sKeyAtt].is_number_float()) {
+            tempskey << doc[sKeyAtt].get<double>();
+          } else if (doc[sKeyAtt].is_string()) {
+            tempskey << doc[sKeyAtt].get<std::string>();
+          } else if (doc[sKeyAtt].is_boolean()) {
+            tempskey << (doc[sKeyAtt].get<bool>() ? "true" : "false");
           }
 
           Slice valsKey = tempskey.str();
@@ -431,145 +380,6 @@ void MemTable::RangeLookUp(
       }
     }
   }
-  /*
-  if(secKey.empty())
-       return false;
-  //ofstream outputFile;
-  //outputFile.open("/home/mohiuddin/Desktop/TestDB/debug.txt");
- //Slice memkey = skey.memtable_key();
- //outputFile<<
- Table::Iterator iter(&table_);
- iter.SeekToFirst();
- bool found = false;
-
- //outputFile<<"in\n";
-
- while (iter.Valid()) {
-
-   const char* entry = iter.key();
-   uint32_t key_length;
-   const char* key_ptr = GetVarint32Ptr(entry, entry+5, &key_length);
-     const uint64_t tag = DecodeFixed64(key_ptr + key_length - 8);
-     std::string val;
-     //outputFile<<"in\n"<<tag<<endl;
-     switch (static_cast<ValueType>(tag & 0xff)) {
-
-       case kTypeValue: {
-
-         Slice v = GetLengthPrefixedSlice(key_ptr + key_length);
-
-         val.assign(v.data(), v.size());
-         //outputFile<<"in\n"<<val<<endl;
-         //parse the Json Object
-
-
-           rapidjson::Document docToParse;
-
-           docToParse.Parse<0>(val.c_str());
-
-           ///
-           const char* sKeyAtt = secKey.c_str();
-
-           if(!docToParse.IsObject()||!docToParse.HasMember(sKeyAtt)||docToParse[sKeyAtt].IsNull())
-               return false;
-
-           std::ostringstream key;
-           if(docToParse[sKeyAtt].IsNumber())
-           {
-                 if(docToParse[sKeyAtt].IsUint64())
-                 {
-                     unsigned long long int tid =
- docToParse[sKeyAtt].GetUint64(); key<<tid;
-
-                 }
-                 else if (docToParse[sKeyAtt].IsInt64())
-                 {
-                     long long int tid = docToParse[sKeyAtt].GetInt64();
-                     key<<tid;
-                 }
-                 else if (docToParse[sKeyAtt].IsDouble())
-                 {
-                     double tid = docToParse[sKeyAtt].GetDouble();
-                     key<<tid;
-                 }
-
-                 else if (docToParse[sKeyAtt].IsUint())
-                 {
-                     unsigned int tid = docToParse[sKeyAtt].GetUint();
-                     key<<tid;
-                 }
-                 else if (docToParse[sKeyAtt].IsInt())
-                 {
-                     int tid = docToParse[sKeyAtt].GetInt();
-                     key<<tid;
-                 }
-           }
-           else if (docToParse[sKeyAtt].IsString())
-           {
-                 const char* tid = docToParse[sKeyAtt].GetString();
-                 key<<tid;
-           }
-           else if(docToParse[sKeyAtt].IsBool())
-           {
-                 bool tid = docToParse[sKeyAtt].GetBool();
-                 key<<tid;
-           }
-
-           Slice Key = key.str();
-           //outputFile<<key.str()<<endl<<val<<endl;
-          if (comparator_.comparator.user_comparator()->Compare(
-           Key,
-           startSkey.user_key()) >= 0 &&
- comparator_.comparator.user_comparator()->Compare( Key, endSkey.user_key()) <=
- 0) { struct SKeyReturnVal newVal; newVal.key = Slice(key_ptr, key_length -
- 8).ToString(); std::string temp;
-
-           if(resultSetofKeysFound->find(newVal.key)==resultSetofKeysFound->end())
-           {
-
-
-               newVal.value = val;//Slice(d2);
-               newVal.sequence_number = tag;
-
-
-
-               if(value->size()<topKOutput)
-               {
-                   Status st = db->Get(leveldb::ReadOptions(),newVal.key,
- &temp); if(st.ok()&&!st.IsNotFound()&&temp==newVal.value)
-                   {
-                       newVal.Push(value, newVal);
-                       resultSetofKeysFound->insert(newVal.key);
-                   }
-               }
-               else if(newVal.sequence_number>value->front().sequence_number)
-               {
-                   Status st = db->Get(leveldb::ReadOptions(),newVal.key,
- &temp); if(st.ok()&&!st.IsNotFound()&&temp==newVal.value)
-                   {
-                       newVal.Pop(value);
-                       newVal.Push(value,newVal);
-                       resultSetofKeysFound->insert(newVal.key);
-                       resultSetofKeysFound->erase(resultSetofKeysFound->find(value->front().key));
-                   }
-               }
-                         found = true;
-
-           }
-
-         }
-
-
-
-       }
-
-     }
-     //if(kNoOfOutputs<=0)
-        //break;
-     iter.Next();
- }
- return found;
- */
 }
 
 } // namespace leveldb

@@ -1,4 +1,5 @@
 #include "docstore/document.h"
+#include "leveldb/db.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/options.h"
 #include "leveldb/status.h"
@@ -68,16 +69,11 @@ TEST(DocumentStoreTest, QueryOnNonExistentCollection) {
   this->TearDown();
 }
 
-TEST(DocumentStoreTest, PutAndGetQuery) {
+TEST(DocumentStoreTest, PutAndGetQueryNormal) {
   leveldb::Status s;
   docstore::DocumentStore store(this->test_dir_, s);
   leveldb::Options options;
   ASSERT_TRUE(s.ok());
-  nlohmann::json doc;
-  doc["user_id"] = 1;
-  doc["user_age"] = 30;
-  doc["user_name"] = "harish";
-
   s = store.CreateCollection("users", options);
   ASSERT_TRUE(s.ok());
   store.Insert("users", "harish", "yayy");
@@ -88,6 +84,79 @@ TEST(DocumentStoreTest, PutAndGetQuery) {
   ASSERT_TRUE(s.ok());
 
   ASSERT_TRUE(value == "yayy");
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, PutAndGetQueryDocument) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  leveldb::Options options;
+
+  options.primary_key = "user_id";
+  options.secondary_key = "user_age";
+  options.filter_policy = leveldb::NewBloomFilterPolicy(20);
+
+  ASSERT_TRUE(s.ok());
+
+  s = store.CreateCollection("users", options);
+  ASSERT_TRUE(s.ok());
+
+  for (int i = 1; i <= 10; ++i) {
+    nlohmann::json doc;
+    doc["user_id"] = i;
+    doc["user_age"] = 20 + i;
+    doc["user_name"] = "user_" + std::to_string(i);
+
+    s = store.Insert("users", doc);
+    ASSERT_TRUE(s.ok());
+  }
+
+  std::string value;
+  s = store.Get("users", "5", value);
+  ASSERT_TRUE(s.ok());
+
+  nlohmann::json retrieved_doc = nlohmann::json::parse(value);
+  ASSERT_TRUE(retrieved_doc["user_age"] == 25);
+  ASSERT_TRUE(retrieved_doc["user_name"] == "user_5");
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, PutAndGetQueryDocumentWithSecIndex) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  leveldb::Options options;
+
+  options.primary_key = "user_id";
+  options.secondary_key = "user_age";
+  options.filter_policy = leveldb::NewBloomFilterPolicy(20);
+
+  ASSERT_TRUE(s.ok());
+
+  s = store.CreateCollection("users", options);
+  ASSERT_TRUE(s.ok());
+
+  for (int i = 1; i <= 10; ++i) {
+    nlohmann::json doc;
+    doc["user_id"] = i;
+    doc["user_age"] = 20 + i;
+    doc["user_name"] = "user_" + std::to_string(i);
+
+    s = store.Insert("users", doc);
+    ASSERT_TRUE(s.ok());
+  }
+
+  std::vector<leveldb::SecondayKeyReturnVal> secondary_values;
+  s = store.GetSec("users", "30", &secondary_values, 1000);
+  ASSERT_TRUE(s.ok());
+  ASSERT_TRUE(secondary_values.size() == 1);
+
+  secondary_values.clear();
+  s = store.RangeGetSec("users", "21", "30", &secondary_values, 1000);
+  ASSERT_TRUE(s.ok());
+
+  ASSERT_TRUE(secondary_values.size() == 10);
 
   this->TearDown();
 }

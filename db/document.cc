@@ -132,119 +132,132 @@ DocumentStore::CheckCollectionInRegistry(const std::string &collection_name) {
 }
 
 leveldb::Status
-DocumentStore::AddCollectionToRegistry(const string &collection_name,
+DocumentStore::AddCollectionToRegistry(const std::string &collection_name,
                                        leveldb::Options &options) {
   assert(metadata_db_ != nullptr);
-  // Passing it through the naive KV interface
   nlohmann::json serialized_json = options.ToJSON();
   return collection_registry_->Put(leveldb::WriteOptions(), collection_name,
                                    serialized_json.dump());
 }
 
-leveldb::Status DocumentStore::Get(const string &collection_name,
+leveldb::Status DocumentStore::Get(const std::string &collection_name,
                                    std::string key, std::string &value) {
-
-  // Check collection first in in-memory structure
-  auto it = collections_handle_.find(collection_name);
-  if (it != collections_handle_.end()) {
-    std::unique_ptr<leveldb::DB> &collection_db = it->second;
-    leveldb::Status s = collection_db->Get(leveldb::ReadOptions(), key, &value);
-    if (!s.ok()) {
-      return s;
-    }
-    return leveldb::Status::OK();
-  }
-
-  // If collection is not found in memory, check registry
-  leveldb::Status s = CheckCollectionInRegistry(collection_name);
-  if (!s.ok() || s.IsNotFound()) {
-    std::cerr << "Attempt to access collection  " << collection_name
-              << " which is not created " << s.ToString() << std::endl;
+  leveldb::Status s;
+  std::unique_ptr<leveldb::DB> *collection_db =
+      GetCollectionHandle(collection_name, s);
+  if (!collection_db) {
     return s;
   }
-
-  // Else the collection is present, lazily load it into collections
-  if (s.ok()) {
-    // load collection handle into collections_
-    s = LoadCollectionFromRegistry(collection_name);
-    if (s.ok() && collections_handle_.find(collection_name) !=
-                      collections_handle_.end()) {
-      collections_handle_[collection_name]->Get(leveldb::ReadOptions(), key,
-                                                &value);
-    }
+  s = (*collection_db)->Get(leveldb::ReadOptions(), key, &value);
+  if (!s.ok()) {
+    std::cerr << "Failed to get from collection " << collection_name << ": "
+              << s.ToString() << std::endl;
   }
   return s;
 }
 
+leveldb::Status DocumentStore::GetSec(
+    const std::string &collection_name, const std::string &secondary_key,
+    std::vector<leveldb::SecondayKeyReturnVal> *value, int top_k) {
+  leveldb::Status s;
+  std::unique_ptr<leveldb::DB> *collection_db =
+      GetCollectionHandle(collection_name, s);
+  if (!collection_db) {
+    return s;
+  }
+  s = (*collection_db)
+          ->Get(leveldb::ReadOptions(), secondary_key, value, top_k);
+  if (!s.ok()) {
+    std::cerr << "Failed to insert into collection " << collection_name << ": "
+              << s.ToString() << std::endl;
+  }
+  return s;
+}
+
+leveldb::Status DocumentStore::RangeGetSec(
+    const std::string &collection_name, const std::string &secondary_start_key,
+    const std::string &secondary_end_key,
+    std::vector<leveldb::SecondayKeyReturnVal> *value, int top_k) {
+  leveldb::Status s;
+  std::unique_ptr<leveldb::DB> *collection_db =
+      GetCollectionHandle(collection_name, s);
+  if (!collection_db) {
+    return s;
+  }
+  s = (*collection_db)
+          ->RangeGet(leveldb::ReadOptions(), secondary_start_key,
+                     secondary_end_key, value, top_k);
+  if (!s.ok()) {
+    std::cerr << "Failed to insert into collection " << collection_name << ": "
+              << s.ToString() << std::endl;
+  }
+  return s;
+}
+
+// TODO: Columnar decomposition
 leveldb::Status DocumentStore::Insert(const std::string &collection_name,
                                       nlohmann::json &document) {
 
-  // Check collection first in in-memory structure
-  auto it = collections_handle_.find(collection_name);
-  if (it != collections_handle_.end()) {
-    std::unique_ptr<leveldb::DB> &collection_db = it->second;
-    leveldb::Status s =
-        collection_db->Put(leveldb::WriteOptions(), document.dump());
-    if (!s.ok()) {
-      return s;
-    }
-    return leveldb::Status::OK();
-  }
-
-  // If collection is not found in memory, check registry
-  leveldb::Status s = CheckCollectionInRegistry(collection_name);
-  if (!s.ok() || s.IsNotFound()) {
-    std::cerr << "Attempt to access collection  " << collection_name
-              << " which is not created " << s.ToString() << std::endl;
+  leveldb::Status s;
+  std::unique_ptr<leveldb::DB> *collection_db =
+      GetCollectionHandle(collection_name, s);
+  if (!collection_db) {
     return s;
   }
-
-  // Else the collection is present, lazily load it into collections
-  if (s.ok()) {
-    // load collection handle into collections_
-    s = LoadCollectionFromRegistry(collection_name);
-    if (s.ok() && collections_handle_.find(collection_name) !=
-                      collections_handle_.end()) {
-      collections_handle_[collection_name]->Put(leveldb::WriteOptions(),
-                                                document.dump());
-    }
+  s = (*collection_db)->Put(leveldb::WriteOptions(), document.dump());
+  if (!s.ok()) {
+    std::cerr << "Failed to insert into collection " << collection_name << ": "
+              << s.ToString() << std::endl;
   }
   return s;
 }
 
+// TODO: Columnar decomposition
 leveldb::Status DocumentStore::Insert(const std::string &collection_name,
                                       std::string key, std::string value) {
-
-  // Check collection first in in-memory structure
-  auto it = collections_handle_.find(collection_name);
-  if (it != collections_handle_.end()) {
-    std::unique_ptr<leveldb::DB> &collection_db = it->second;
-    leveldb::Status s = collection_db->Put(leveldb::WriteOptions(), key, value);
-    if (!s.ok()) {
-      return s;
-    }
-    return leveldb::Status::OK();
-  }
-
-  // If collection is not found in memory, check registry
-  leveldb::Status s = CheckCollectionInRegistry(collection_name);
-  if (!s.ok() || s.IsNotFound()) {
-    std::cerr << "Attempt to access collection  " << collection_name
-              << " which is not created " << s.ToString() << std::endl;
+  leveldb::Status s;
+  std::unique_ptr<leveldb::DB> *collection_db =
+      GetCollectionHandle(collection_name, s);
+  if (!collection_db) {
     return s;
   }
-
-  // Else the collection is present, lazily load it into collections
-  if (s.ok()) {
-    // load collection handle into collections_
-    s = LoadCollectionFromRegistry(collection_name);
-    if (s.ok() && collections_handle_.find(collection_name) !=
-                      collections_handle_.end()) {
-      collections_handle_[collection_name]->Put(leveldb::WriteOptions(), key,
-                                                value);
-    }
+  s = (*collection_db)->Put(leveldb::WriteOptions(), key, value);
+  if (!s.ok()) {
+    std::cerr << "Failed to insert into collection " << collection_name << ": "
+              << s.ToString() << std::endl;
   }
   return s;
+}
+
+std::unique_ptr<leveldb::DB> *
+DocumentStore::GetCollectionHandle(const std::string &collection_name,
+                                   leveldb::Status &s) {
+
+  auto it = collections_handle_.find(collection_name);
+  if (it != collections_handle_.end()) {
+    return &it->second;
+  }
+
+  s = CheckCollectionInRegistry(collection_name);
+  if (!s.ok()) {
+    if (s.IsNotFound()) {
+      std::cerr << "Attempt to access collection " << collection_name
+                << " which is not created " << s.ToString() << std::endl;
+    }
+    return nullptr;
+  }
+
+  s = LoadCollectionFromRegistry(collection_name);
+  if (!s.ok()) {
+    return nullptr;
+  }
+
+  it = collections_handle_.find(collection_name);
+  if (it != collections_handle_.end()) {
+    return &it->second;
+  }
+
+  return nullptr;
 }
 
 DocumentStore::~DocumentStore() {}

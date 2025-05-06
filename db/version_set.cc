@@ -10,7 +10,6 @@
 #include "db/table_cache.h"
 #include "leveldb/env.h"
 #include "leveldb/table_builder.h"
-#include "rapidjson/document.h"
 #include "table/merger.h"
 #include "table/two_level_iterator.h"
 #include "util/coding.h"
@@ -286,35 +285,22 @@ struct RangeSecSaver {
 };
 } // namespace
 
-std::string V_GetAttr(const rapidjson::Document &doc, const char *attr) {
-  if (!doc.IsObject() || !doc.HasMember(attr) || doc[attr].IsNull())
+std::string V_GetAttr(const nlohmann::json &doc, const char *attr) {
+  if (!doc.is_object() || !doc.contains(attr) || doc[attr].is_null())
     return "";
 
   std::ostringstream pKey;
 
-  if (doc[attr].IsNumber()) {
-    if (doc[attr].IsUint64()) {
-      unsigned long long int tid = doc[attr].GetUint64();
-      pKey << tid;
-    } else if (doc[attr].IsInt64()) {
-      long long int tid = doc[attr].GetInt64();
-      pKey << tid;
-    } else if (doc[attr].IsDouble()) {
-      double tid = doc[attr].GetDouble();
-      pKey << tid;
-    } else if (doc[attr].IsUint()) {
-      unsigned int tid = doc[attr].GetUint();
-      pKey << tid;
-    } else if (doc[attr].IsInt()) {
-      int tid = doc[attr].GetInt();
-      pKey << tid;
-    }
-  } else if (doc[attr].IsString()) {
-    const char *tid = doc[attr].GetString();
-    pKey << tid;
-  } else if (doc[attr].IsBool()) {
-    bool tid = doc[attr].GetBool();
-    pKey << tid;
+  if (doc[attr].is_number_unsigned()) {
+    pKey << doc[attr].get<uint64_t>();
+  } else if (doc[attr].is_number_integer()) {
+    pKey << doc[attr].get<int64_t>();
+  } else if (doc[attr].is_number_float()) {
+    pKey << doc[attr].get<double>();
+  } else if (doc[attr].is_string()) {
+    pKey << doc[attr].get<std::string>();
+  } else if (doc[attr].is_boolean()) {
+    pKey << (doc[attr].get<bool>() ? "true" : "false");
   }
 
   return pKey.str();
@@ -340,55 +326,39 @@ static bool SaveValue(void *arg, const Slice &ikey, const Slice &v) {
 }
 
 static bool SecSaveValue(void *arg, const Slice &ikey, const Slice &v,
-                         string &secKey, int &topKOutput, DBImpl *db) {
-
-  // ofstream outputFile;
-  // outputFile.open("/home/mohiuddin/Desktop/TestDB/debug.txt"
-  // ,std::ofstream::out | std::ofstream::app);
-
+                         std::string &secKey, int &topKOutput, DBImpl *db) {
   SecSaver *s = reinterpret_cast<SecSaver *>(arg);
 
   ParsedInternalKey parsed_key;
   if (!ParseInternalKey(ikey, &parsed_key)) {
     s->state = kCorrupt;
   } else {
+    std::string val(v.data(), v.size());
 
-  std:
-    string val;
-    val.assign(v.data(), v.size());
+    nlohmann::json docToParse;
+    try {
+      docToParse = nlohmann::json::parse(val);
+    } catch (const nlohmann::json::parse_error &e) {
+      return false;
+    }
 
-    rapidjson::Document docToParse;
-
-    docToParse.Parse<0>(val.c_str());
-
-    ///
     const char *sKeyAtt = secKey.c_str();
-
-    Slice Key = V_GetAttr(docToParse, sKeyAtt);
+    std::string Key = V_GetAttr(docToParse, sKeyAtt);
 
     if (s->ucmp->Compare(Key, s->user_key) == 0) {
-
       s->state = (parsed_key.type == kTypeValue) ? kFound : kDeleted;
 
       if (s->state == kFound) {
-
-        struct SecondayKeyReturnVal newVal;
-
+        SecondayKeyReturnVal newVal;
         Slice ukey = ExtractUserKey(ikey);
 
         if (s->resultSetofKeysFound->find(ukey.ToString()) ==
             s->resultSetofKeysFound->end()) {
-
-          newVal.key = ukey.ToString(); // Slice(d);
-
-          newVal.value = val; // Slice(d2);
-
+          newVal.key = ukey.ToString();
+          newVal.value = val;
           newVal.sequence_number = parsed_key.sequence;
-          std::string temp;
-          // s->value->push_back(newVal);
-          if ((int)(s->value->size()) < topKOutput) {
-            // Status st = db->Get(leveldb::ReadOptions(),newVal.key, &temp);
-            // if(st.ok()&&!st.IsNotFound()&&temp==newVal.value)
+
+          if (s->value->size() < static_cast<size_t>(topKOutput)) {
             if (db->checkifValid(leveldb::ReadOptions(), newVal.key,
                                  s->level)) {
               newVal.Push(s->value, newVal);
@@ -396,14 +366,13 @@ static bool SecSaveValue(void *arg, const Slice &ikey, const Slice &v,
             }
           } else if (newVal.sequence_number >
                      s->value->front().sequence_number) {
-            // Status st = db->Get(leveldb::ReadOptions(),newVal.key, &temp);
-            // if(st.ok()&&!st.IsNotFound()&&temp==newVal.value)
             if (db->checkifValid(leveldb::ReadOptions(), newVal.key,
                                  s->level)) {
               newVal.Pop(s->value);
               newVal.Push(s->value, newVal);
               s->resultSetofKeysFound->insert(ukey.ToString());
-              // s->resultSetofKeysFound->erase(s->resultSetofKeysFound->find(s->value->front().key));
+              s->resultSetofKeysFound->erase(
+                  s->resultSetofKeysFound->find(s->value->front().key));
             }
           }
 
@@ -426,23 +395,18 @@ static bool RangeSecSaveValue(void *arg, const Slice &ikey, const Slice &v,
     s->state = kCorrupt;
   } else {
 
-  std:
-    string val;
+    std::string val;
     val.assign(v.data(), v.size());
+    nlohmann::json docToParse;
 
-    // parse the Json Object
+    try {
+      docToParse = nlohmann::json::parse(val);
+    } catch (const nlohmann::json::parse_error &e) {
+      return false;
+    }
 
-    rapidjson::Document docToParse;
-
-    docToParse.Parse<0>(val.c_str());
-
-    ///
     const char *sKeyAtt = secKey.c_str();
     Slice Key = V_GetAttr(docToParse, sKeyAtt);
-
-    // cout<<s->start_user_key.ToString()<<","<< s->end_user_key.ToString()<<"
-    // -> "<< Key.ToString() <<endl;
-
     if (s->ucmp->Compare(Key, s->start_user_key) >= 0 &&
         s->ucmp->Compare(Key, s->end_user_key) <= 0) {
 
@@ -450,10 +414,6 @@ static bool RangeSecSaveValue(void *arg, const Slice &ikey, const Slice &v,
       s->state = (parsed_key.type == kTypeValue) ? kFound : kDeleted;
 
       if (s->state == kFound) {
-        //        	 cout<<s->start_user_key.ToString()<<","<<
-        //        s->end_user_key.ToString()<<" -> "<< Key.ToString() <<endl;
-
-        // cout<<"In Range 2\n";
         struct SecondayKeyReturnVal newVal;
         Slice ukey = ExtractUserKey(ikey);
         {

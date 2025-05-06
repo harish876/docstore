@@ -19,9 +19,6 @@
 #include "leveldb/table.h"
 #include "leveldb/table_builder.h"
 #include "port/port.h"
-#include "rapidjson/document.h"
-#include "rapidjson/stringbuffer.h"
-#include "rapidjson/writer.h"
 #include "table/block.h"
 #include "table/merger.h"
 #include "table/two_level_iterator.h"
@@ -29,7 +26,6 @@
 #include "util/logging.h"
 #include "util/mutexlock.h"
 #include <algorithm>
-#include <fstream>
 #include <set>
 #include <sstream>
 #include <stdint.h>
@@ -1164,10 +1160,6 @@ Status DBImpl::Get(const ReadOptions &options, const Slice &key,
   current->Unref();
   return s;
 }
-static bool NewestFirst(const leveldb::SecondayKeyReturnVal &a,
-                        const leveldb::SecondayKeyReturnVal &b) {
-  return a.sequence_number < b.sequence_number ? false : true;
-}
 
 Status DBImpl::Get(const ReadOptions &options, const Slice &skey,
                    std::vector<SecondayKeyReturnVal> *value, int kNoOfOutputs) {
@@ -1325,59 +1317,41 @@ Status DBImpl::Put(const WriteOptions &o, const Slice &key, const Slice &val) {
 }
 
 Status DBImpl::Put(const WriteOptions &o, const Slice &val) {
-
-  if (this->options_.primary_key.empty())
+  if (this->options_.primary_key.empty()) {
     return Status::InvalidArgument("Primary Attribute Not Set");
-  rapidjson::Document docToParse;
-
-  docToParse.Parse<0>(val.ToString().c_str());
-  const char *pKeyAtt = this->options_.primary_key.c_str();
-
-  if (!docToParse.IsObject() || !docToParse.HasMember(pKeyAtt) ||
-      docToParse[pKeyAtt].IsNull())
-    return Status::InvalidArgument("Primary Attribute does not found");
-
-  std::ostringstream pKey;
-  if (docToParse[pKeyAtt].IsNumber()) {
-    if (docToParse[pKeyAtt].IsUint64()) {
-      unsigned long long int tid = docToParse[pKeyAtt].GetUint64();
-      pKey << tid;
-
-    } else if (docToParse[pKeyAtt].IsInt64()) {
-      long long int tid = docToParse[pKeyAtt].GetInt64();
-      pKey << tid;
-    } else if (docToParse[pKeyAtt].IsDouble()) {
-      double tid = docToParse[pKeyAtt].GetDouble();
-      pKey << tid;
-    }
-
-    else if (docToParse[pKeyAtt].IsUint()) {
-      unsigned int tid = docToParse[pKeyAtt].GetUint();
-      pKey << tid;
-    } else if (docToParse[pKeyAtt].IsInt()) {
-      int tid = docToParse[pKeyAtt].GetInt();
-      pKey << tid;
-    }
-  } else if (docToParse[pKeyAtt].IsString()) {
-    const char *tid = docToParse[pKeyAtt].GetString();
-    pKey << tid;
-  } else if (docToParse[pKeyAtt].IsBool()) {
-    bool tid = docToParse[pKeyAtt].GetBool();
-    pKey << tid;
+  }
+  nlohmann::json doc;
+  try {
+    doc = nlohmann::json::parse(val.ToString());
+  } catch (const nlohmann::json::parse_error &e) {
+    return Status::InvalidArgument("Failed to parse JSON: " +
+                                   std::string(e.what()));
   }
 
-  // Slice key = pKey.str();
-  docToParse.RemoveMember(this->options_.primary_key.c_str());
-  rapidjson::StringBuffer strbuf;
-  rapidjson::Writer<rapidjson::StringBuffer> writer(strbuf);
-  docToParse.Accept(writer);
-  // ofstream outputFile;
-  // outputFile.open("/home/mohiuddin/Desktop/TestDB/debug3.txt"
-  // ,std::ofstream::out | std::ofstream::app);
+  const std::string &pKeyAtt = this->options_.primary_key;
 
-  // outputFile<<pKey.str()<<endl;
+  if (!doc.contains(pKeyAtt) || doc[pKeyAtt].is_null()) {
+    return Status::InvalidArgument("Primary Attribute not found or is null");
+  }
 
-  return DB::Put(o, pKey.str(), strbuf.GetString());
+  std::ostringstream pKey;
+  if (doc[pKeyAtt].is_number_unsigned()) {
+    pKey << doc[pKeyAtt].get<uint64_t>();
+  } else if (doc[pKeyAtt].is_number_integer()) {
+    pKey << doc[pKeyAtt].get<int64_t>();
+  } else if (doc[pKeyAtt].is_number_float()) {
+    pKey << doc[pKeyAtt].get<double>();
+  } else if (doc[pKeyAtt].is_string()) {
+    pKey << doc[pKeyAtt].get<std::string>();
+  } else if (doc[pKeyAtt].is_boolean()) {
+    pKey << (doc[pKeyAtt].get<bool>() ? "true" : "false");
+  } else {
+    return Status::InvalidArgument("Unsupported primary key type");
+  }
+
+  doc.erase(pKeyAtt);
+  std::string serializedDoc = doc.dump();
+  return DB::Put(o, pKey.str(), serializedDoc);
 }
 
 Status DBImpl::Delete(const WriteOptions &options, const Slice &key) {
@@ -1650,22 +1624,6 @@ Status DB::Put(const WriteOptions &opt, const Slice &key, const Slice &value) {
 
   return Write(opt, &batch);
 }
-/*
-Status DB::Put(const WriteOptions& o, const Slice& val) {
-
-   if(this->options.PrimaryAtt.empty())
-      return Status::InvalidArgument("Primary Attribute Not Set");
-  rapidjson::Document d;
-
-  d.Parse<0>(val.ToString().c_str());
-
-  if(!d.HasMember(this->options.PrimaryAtt.c_str()))
-      return Status::InvalidArgument("Primary Attribute does not found");
-  Slice key = d[this->options.PrimaryAtt.c_str()].GetString();
-  return DB::Put(o,  key , val);
-}
-
-*/
 
 Status DB::Delete(const WriteOptions &opt, const Slice &key) {
   WriteBatch batch;
