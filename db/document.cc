@@ -137,7 +137,7 @@ DocumentStore::OpenCollection(const std::string &collection_name,
 leveldb::Status
 DocumentStore::CheckCollectionInRegistry(const std::string &collection_name,
                                          nlohmann::json &metadata) {
-  assert(metadata_db_ != nullptr);
+  assert(collection_registry_ != nullptr);
   std::string metadata_buf;
   leveldb::Status s = collection_registry_->Get(leveldb::ReadOptions(),
                                                 collection_name, &metadata_buf);
@@ -157,7 +157,7 @@ DocumentStore::CheckCollectionInRegistry(const std::string &collection_name,
 leveldb::Status
 DocumentStore::AddCollectionToRegistry(const std::string &collection_name,
                                        nlohmann::json &metadata) {
-  assert(metadata_db_ != nullptr);
+  assert(collection_registry_ != nullptr);
   leveldb::Status s = collection_registry_->Put(
       leveldb::WriteOptions(), collection_name, metadata.dump());
   if (!s.ok()) {
