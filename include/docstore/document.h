@@ -59,6 +59,7 @@ public:
   // Utility Methods
   CollectionHandle *GetCollectionHandle(const std::string &collection_name,
                                         leveldb::Status &s);
+  bool isValidJSON(const nlohmann::json &document);
 
   // Metadata Helper functions
   leveldb::Status CheckCollectionInRegistry(const string &collection_name,

@@ -312,9 +312,9 @@ leveldb::Status DocumentStore::ExtendMetadata(const nlohmann::json &document,
 leveldb::Status DocumentStore::ValidateSchema(const nlohmann::json &document,
                                               const nlohmann::json &schema) {
   leveldb::Status s;
-  // if (!nlohmann::json::accept(schema)) {
-  //   return s.Corruption("Invalid Schema Object. Invalid JSON");
-  // }
+  if (!isValidJSON(schema)) {
+    return s.Corruption("Invalid Schema Object. Invalid JSON");
+  }
   /**
     Example Schema Object. Extend support only for data types
     json schema = {
@@ -386,6 +386,15 @@ bool DocumentStore::validate_type(nlohmann::basic_json<> &document_value,
   } else if (type == "null") {
     return document_value.is_null();
   } else {
+    return false;
+  }
+}
+
+bool DocumentStore::isValidJSON(const nlohmann::json &document) {
+  try {
+    auto _ = nlohmann::json::parse(document.dump());
+    return true;
+  } catch (const nlohmann::json::parse_error &e) {
     return false;
   }
 }
