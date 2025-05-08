@@ -286,8 +286,8 @@ struct ReadOptions {
   ReadType type;
 
   ReadOptions()
-      : verify_checksums(false), fill_cache(true), type(ReadType::Write),
-        snapshot(NULL) {}
+      : verify_checksums(false), fill_cache(true), snapshot(NULL),
+        type(ReadType::Write) {}
 };
 
 // Options that control write operations

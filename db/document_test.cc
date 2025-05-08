@@ -3,6 +3,7 @@
 #include "leveldb/filter_policy.h"
 #include "leveldb/options.h"
 #include "leveldb/status.h"
+#include "nlohmann/json_fwd.hpp"
 #include "util/testharness.h"
 #include <cassert>
 #include <nlohmann/json.hpp>
@@ -46,14 +47,43 @@ TEST(DocumentStoreTest, SerializeBloomFilter) {
 TEST(DocumentStoreTest, CreateCollection) {
   leveldb::Status s;
   docstore::DocumentStore store(this->test_dir_, s);
-  leveldb::Options options;
-
-  options.primary_key = "user_id";
-  options.secondary_key = "user_age";
-
   ASSERT_TRUE(s.ok());
-  store.CreateCollection("users", options);
-  ASSERT_TRUE(store.CheckCollectionInRegistry("users").ok());
+
+  leveldb::Options options;
+  nlohmann::json empty_schema;
+
+  store.CreateCollection("users", options, empty_schema);
+  ASSERT_TRUE(s.ok());
+
+  nlohmann::json metadata;
+  ASSERT_TRUE(store.CheckCollectionInRegistry("users", metadata).ok());
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, CreateCollectionWithSchema) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+
+  leveldb::Options options;
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": [ "user_id", "user_age"]
+    }
+  )"_json;
+
+  store.CreateCollection("users", options, schema);
+  ASSERT_TRUE(s.ok());
+
+  nlohmann::json metadata;
+  ASSERT_TRUE(store.CheckCollectionInRegistry("users", metadata).ok());
 
   this->TearDown();
 }
@@ -63,8 +93,39 @@ TEST(DocumentStoreTest, QueryOnNonExistentCollection) {
   docstore::DocumentStore store(this->test_dir_, s);
   leveldb::Options options;
   ASSERT_TRUE(s.ok());
-  s = store.LoadCollectionFromRegistry("users");
+  nlohmann::json metadata;
+  s = store.CheckCollectionInRegistry("users", metadata);
   ASSERT_TRUE(!s.ok());
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, ValidateSchema) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+  leveldb::Options options;
+
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": [ "user_id", "user_age"]
+    }
+  )"_json;
+
+  nlohmann::json doc;
+  doc["user_id"] = 1;
+  doc["user_age"] = 20;
+  doc["user_name"] = "user_1";
+
+  store.ValidateSchema(doc, schema);
+
+  ASSERT_TRUE(s.ok());
 
   this->TearDown();
 }
@@ -72,17 +133,20 @@ TEST(DocumentStoreTest, QueryOnNonExistentCollection) {
 TEST(DocumentStoreTest, PutAndGetQueryNormal) {
   leveldb::Status s;
   docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+
   leveldb::Options options;
+  nlohmann::json empty_schema;
+
+  s = store.CreateCollection("users", options, empty_schema);
   ASSERT_TRUE(s.ok());
-  s = store.CreateCollection("users", options);
-  ASSERT_TRUE(s.ok());
+
   store.Insert("users", "harish", "yayy");
   ASSERT_TRUE(s.ok());
 
   std::string value;
   s = store.Get("users", "harish", value);
   ASSERT_TRUE(s.ok());
-
   ASSERT_TRUE(value == "yayy");
 
   this->TearDown();
@@ -91,15 +155,26 @@ TEST(DocumentStoreTest, PutAndGetQueryNormal) {
 TEST(DocumentStoreTest, PutAndGetQueryDocument) {
   leveldb::Status s;
   docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+
   leveldb::Options options;
 
   options.primary_key = "user_id";
   options.secondary_key = "user_age";
   options.filter_policy = leveldb::NewBloomFilterPolicy(20);
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": [ "user_id", "user_age"]
+    }
+  )"_json;
 
-  ASSERT_TRUE(s.ok());
-
-  s = store.CreateCollection("users", options);
+  s = store.CreateCollection("users", options, schema);
   ASSERT_TRUE(s.ok());
 
   for (int i = 1; i <= 10; ++i) {
@@ -126,15 +201,26 @@ TEST(DocumentStoreTest, PutAndGetQueryDocument) {
 TEST(DocumentStoreTest, PutAndGetQueryDocumentWithSecIndex) {
   leveldb::Status s;
   docstore::DocumentStore store(this->test_dir_, s);
-  leveldb::Options options;
+  ASSERT_TRUE(s.ok());
 
+  leveldb::Options options;
   options.primary_key = "user_id";
   options.secondary_key = "user_age";
   options.filter_policy = leveldb::NewBloomFilterPolicy(20);
 
-  ASSERT_TRUE(s.ok());
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": [ "user_id", "user_age"]
+    }
+  )"_json;
 
-  s = store.CreateCollection("users", options);
+  s = store.CreateCollection("users", options, schema);
   ASSERT_TRUE(s.ok());
 
   for (int i = 1; i <= 10; ++i) {
