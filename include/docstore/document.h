@@ -26,8 +26,8 @@ public:
   ~DocumentStore();
 
   // Disable copying
-  DocumentStore(const DocumentStore &) = delete;
-  DocumentStore &operator=(const DocumentStore &) = delete;
+  // DocumentStore(const DocumentStore &) = delete;
+  // DocumentStore &operator=(const DocumentStore &) = delete;
 
   leveldb::Status CreateCollection(const std::string &collection_name,
                                    leveldb::Options options,

@@ -110,8 +110,8 @@ leveldb::Status
 DocumentStore::OpenCollection(const std::string &collection_name,
                               const nlohmann::json &metadata) {
   leveldb::Status s;
-  leveldb::Options collection_options =
-      leveldb::Options(metadata["options"].dump(), s);
+  leveldb::Options collection_options;
+  collection_options.FromJSON(metadata["options"], s);
   if (!s.ok()) {
     std::cerr << "Failed to parse collection settings/options  "
               << collection_name << " from registry " << s.ToString()

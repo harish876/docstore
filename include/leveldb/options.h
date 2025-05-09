@@ -193,74 +193,77 @@ struct Options {
     return json_obj;
   }
 
-  Options(const nlohmann::json json_obj, leveldb::Status &s) {
+  inline Options FromJSON(const nlohmann::json &json_obj, leveldb::Status &s) {
+    leveldb::Options options;
     try {
-      // Deserialize fields from the JSON object
-      if (json_obj.contains("create_if_missing") &&
-          json_obj["create_if_missing"].is_boolean()) {
-        this->create_if_missing = json_obj["create_if_missing"].get<bool>();
-      }
-      if (json_obj.contains("error_if_exists") &&
-          json_obj["error_if_exists"].is_boolean()) {
-        this->error_if_exists = json_obj["error_if_exists"].get<bool>();
-      }
-      if (json_obj.contains("paranoid_checks") &&
-          json_obj["paranoid_checks"].is_boolean()) {
-        this->paranoid_checks = json_obj["paranoid_checks"].get<bool>();
-      }
-      if (json_obj.contains("write_buffer_size") &&
-          json_obj["write_buffer_size"].is_number_unsigned()) {
-        this->write_buffer_size = json_obj["write_buffer_size"].get<size_t>();
-      }
-      if (json_obj.contains("max_open_files") &&
-          json_obj["max_open_files"].is_number_integer()) {
-        this->max_open_files = json_obj["max_open_files"].get<int>();
-      }
-      if (json_obj.contains("block_size") &&
-          json_obj["block_size"].is_number_unsigned()) {
-        this->block_size = json_obj["block_size"].get<size_t>();
-      }
-      if (json_obj.contains("block_restart_interval") &&
-          json_obj["block_restart_interval"].is_number_integer()) {
-        this->block_restart_interval =
-            json_obj["block_restart_interval"].get<int>();
-      }
+      // Deserialize fields from the JSON object with default values
+      options.create_if_missing = json_obj.value("create_if_missing", false);
+      options.error_if_exists = json_obj.value("error_if_exists", false);
+      options.paranoid_checks = json_obj.value("paranoid_checks", false);
+      options.write_buffer_size = json_obj.value(
+          "write_buffer_size", size_t(4 * 1024 * 1024)); // Default: 4MB
+      options.max_open_files =
+          json_obj.value("max_open_files", 1000); // Default: 1000
+      options.block_size =
+          json_obj.value("block_size", size_t(4 * 1024)); // Default: 4KB
+      options.block_restart_interval =
+          json_obj.value("block_restart_interval", 16); // Default: 16
+
+      // Handle compression
       if (json_obj.contains("compression") &&
           json_obj["compression"].is_string()) {
         std::string compression = json_obj["compression"].get<std::string>();
         if (compression == "NoCompression") {
-          this->compression = kNoCompression;
+          options.compression = kNoCompression;
         } else if (compression == "SnappyCompression") {
-          this->compression = kSnappyCompression;
+          options.compression = kSnappyCompression;
+        } else {
+          s = leveldb::Status::InvalidArgument(
+              "Unsupported compression type: " + compression);
+          return options;
         }
+      } else {
+        options.compression = kSnappyCompression; // Default: SnappyCompression
       }
-      if (json_obj.contains("primary_key") &&
-          json_obj["primary_key"].is_string()) {
-        this->primary_key = json_obj["primary_key"].get<std::string>();
-      }
-      if (json_obj.contains("secondary_key") &&
-          json_obj["secondary_key"].is_string()) {
-        this->secondary_key = json_obj["secondary_key"].get<std::string>();
-      }
-      if (json_obj.contains("interval_tree_file_name") &&
-          json_obj["interval_tree_file_name"].is_string()) {
-        this->interval_tree_file_name =
-            json_obj["interval_tree_file_name"].get<std::string>();
-      }
+
+      // Handle primary and secondary keys
+      options.primary_key = json_obj.value("primary_key", "");
+      options.secondary_key = json_obj.value("secondary_key", "");
+
+      // Handle interval tree file name
+      options.interval_tree_file_name =
+          json_obj.value("interval_tree_file_name", "");
+
+      // Handle filter policy
       if (json_obj.contains("filter_policy") &&
           json_obj["filter_policy"].is_string()) {
-        // TODO: remove hardcoding filter policyt bits_per_key
-        this->filter_policy = NewBloomFilterPolicy(20);
+        std::string filter_policy_name =
+            json_obj["filter_policy"].get<std::string>();
+        if (filter_policy_name == "leveldb.BuiltinBloomFilter") {
+          int bits_per_key = json_obj.value("filter_policy_bits_per_key",
+                                            20); // Default: 20 bits per key
+          options.filter_policy = NewBloomFilterPolicy(bits_per_key);
+        } else {
+          s = leveldb::Status::InvalidArgument("Unsupported filter policy: " +
+                                               filter_policy_name);
+          return options;
+        }
+      } else {
+        options.filter_policy = nullptr; // Default: no filter policy
       }
+
+      // Set status to OK if everything is parsed successfully
       s = leveldb::Status::OK();
 
     } catch (const nlohmann::json::exception &e) {
       s = leveldb::Status::InvalidArgument(
-          "Invalid Settings Object recovered from metadata table.");
-      std::cerr << "Invalid Settings Object recovered from metadata table. "
-                   "Error parsing JSON: "
-                << e.what() << std::endl;
+          "Invalid Settings Object recovered from metadata table. Error "
+          "parsing JSON: " +
+          std::string(e.what()));
+      std::cerr << "Error parsing JSON: " << e.what() << std::endl;
     }
+
+    return options;
   }
 };
 

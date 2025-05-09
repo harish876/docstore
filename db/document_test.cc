@@ -34,6 +34,28 @@ TEST(DocumentStoreTest, SerializeOptions) {
   this->TearDown();
 }
 
+TEST(DocumentStoreTest, ParseOptionsFromJSON) {
+  nlohmann::json schema;
+  nlohmann::json s_options;
+  s_options = R"(
+    {
+      "primary_key": "id",
+      "secondary_key": "age"
+    }
+  )"_json;
+
+  leveldb::Status s;
+  leveldb::Options options;
+  options.FromJSON(s_options, s);
+  ASSERT_TRUE(s.ok());
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+
+  s = store.CreateCollection("users", options, schema);
+  ASSERT_TRUE(s.ok());
+  this->TearDown();
+}
+
 TEST(DocumentStoreTest, SerializeBloomFilter) {
   leveldb::Options options;
   options.filter_policy = leveldb::NewBloomFilterPolicy(20);
