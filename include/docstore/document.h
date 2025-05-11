@@ -67,7 +67,7 @@ public:
   leveldb::Status AddCollectionToRegistry(const string &collection_name,
                                           nlohmann::json &metadata);
   leveldb::Status OpenCollection(const std::string &collection_name,
-                                 const nlohmann::json &metadata);
+                                 nlohmann::json &metadata);
   leveldb::Status ValidateSchema(const nlohmann::json &document,
                                  const nlohmann::json &schema);
 

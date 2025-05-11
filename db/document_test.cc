@@ -6,6 +6,7 @@
 #include "nlohmann/json_fwd.hpp"
 #include "util/testharness.h"
 #include <cassert>
+#include <iostream>
 #include <nlohmann/json.hpp>
 
 class DocumentStoreTest {
@@ -46,8 +47,11 @@ TEST(DocumentStoreTest, ParseOptionsFromJSON) {
 
   leveldb::Status s;
   leveldb::Options options;
-  options.FromJSON(s_options, s);
+  options = options.FromJSON(s_options, s);
   ASSERT_TRUE(s.ok());
+  ASSERT_TRUE(options.primary_key == "id");
+  ASSERT_TRUE(options.secondary_key == "age");
+
   docstore::DocumentStore store(this->test_dir_, s);
   ASSERT_TRUE(s.ok());
 
@@ -74,7 +78,7 @@ TEST(DocumentStoreTest, CreateCollection) {
   leveldb::Options options;
   nlohmann::json empty_schema;
 
-  store.CreateCollection("users", options, empty_schema);
+  s = store.CreateCollection("users", options, empty_schema);
   ASSERT_TRUE(s.ok());
 
   nlohmann::json metadata;
@@ -101,11 +105,11 @@ TEST(DocumentStoreTest, CreateCollectionWithSchema) {
     }
   )"_json;
 
-  store.CreateCollection("users", options, schema);
+  store.CreateCollection("users_1", options, schema);
   ASSERT_TRUE(s.ok());
 
   nlohmann::json metadata;
-  ASSERT_TRUE(store.CheckCollectionInRegistry("users", metadata).ok());
+  ASSERT_TRUE(store.CheckCollectionInRegistry("users_1", metadata).ok());
 
   this->TearDown();
 }
@@ -148,6 +152,170 @@ TEST(DocumentStoreTest, ValidateSchema) {
   store.ValidateSchema(doc, schema);
 
   ASSERT_TRUE(s.ok());
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, ValidateFalseSchema) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+  leveldb::Options options;
+
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": [ "user_id", "user_age"]
+    }
+  )"_json;
+
+  nlohmann::json doc;
+  doc["user_id"] = 1;
+  doc["user_name"] = "user_1";
+
+  s = store.ValidateSchema(doc, schema);
+
+  ASSERT_TRUE(!s.ok());
+  std::cout << "Invalid Schema Message - " << s.ToString() << " \n";
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, ExtendMetadataTest) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+  leveldb::Options options;
+  options.primary_key = "user_id";
+  options.secondary_key = "user_age";
+
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": [ "user_id", "user_age"]
+    }
+  )"_json;
+
+  nlohmann::json s_options = options.ToJSON();
+  nlohmann::json result;
+
+  store.ExtendMetadata(s_options, schema, result);
+
+  ASSERT_TRUE(result.contains("options"));
+  ASSERT_TRUE(result.contains("schema"));
+}
+
+TEST(DocumentStoreTest, CheckCollectionInRegistryTest) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+  leveldb::Options options;
+  options.primary_key = "user_id";
+  options.secondary_key = "user_age";
+
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": [ "user_id", "user_age"]
+    }
+  )"_json;
+
+  s = store.CreateCollection("users", options, schema);
+
+  nlohmann::json metadata;
+  s = store.CheckCollectionInRegistry("users", metadata);
+  ASSERT_OK(s);
+
+  ASSERT_TRUE(metadata.contains("options"));
+  ASSERT_TRUE(metadata.contains("schema"));
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, GetCollectionHandleTest) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+  leveldb::Options options;
+  options.primary_key = "user_id";
+  options.secondary_key = "user_age";
+
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": [ "user_id", "user_age"]
+    }
+  )"_json;
+
+  s = store.CreateCollection("users", options, schema);
+  auto handle = store.GetCollectionHandle("users", s);
+  ASSERT_TRUE(s.ok());
+  ASSERT_TRUE(handle != nullptr);
+
+  ASSERT_TRUE(handle->metadata_.contains("options"));
+  ASSERT_TRUE(handle->metadata_.contains("schema"));
+
+  nlohmann::json doc;
+  doc["user_id"] = 1;
+  doc["user_name"] = "user_1";
+
+  s = store.Insert("users", doc);
+
+  ASSERT_TRUE(!s.ok());
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, PutDocument) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+  leveldb::Options options;
+  options.primary_key = "user_id";
+  options.secondary_key = "user_age";
+
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": [ "user_id", "user_age"]
+    }
+  )"_json;
+
+  s = store.CreateCollection("users", options, schema);
+  ASSERT_TRUE(s.ok());
+
+  nlohmann::json doc;
+  doc["user_id"] = 1;
+  doc["user_name"] = "user_1";
+
+  s = store.Insert("users", doc);
+
+  ASSERT_TRUE(!s.ok());
 
   this->TearDown();
 }
@@ -265,6 +433,49 @@ TEST(DocumentStoreTest, PutAndGetQueryDocumentWithSecIndex) {
   ASSERT_TRUE(s.ok());
 
   ASSERT_TRUE(secondary_values.size() == 10);
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, PersistAndRetrieveCollection) {
+  leveldb::Status s;
+  {
+    docstore::DocumentStore store(this->test_dir_, s);
+    ASSERT_TRUE(s.ok());
+
+    // Define options and schema
+    leveldb::Options options;
+    options.primary_key = "user_id";
+    options.secondary_key = "user_age";
+
+    nlohmann::json schema;
+    schema = R"(
+      {
+        "fields": [
+          {"user_id": "integer"},
+          {"user_age": "integer"},
+          {"user_name": "string"}
+        ],
+        "required": [ "user_id", "user_age"]
+      }
+    )"_json;
+
+    // Create the "users" collection
+    s = store.CreateCollection("users", options, schema);
+    s = store.CreateCollection("users_1", options, schema);
+    ASSERT_TRUE(s.ok());
+  }
+
+  {
+    docstore::DocumentStore store(this->test_dir_, s);
+    ASSERT_TRUE(s.ok());
+
+    nlohmann::json metadata;
+    s = store.CheckCollectionInRegistry("users", metadata);
+    ASSERT_TRUE(s.ok());
+    ASSERT_TRUE(metadata.contains("options"));
+    ASSERT_TRUE(metadata.contains("schema"));
+  }
 
   this->TearDown();
 }

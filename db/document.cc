@@ -3,6 +3,7 @@
 #include "leveldb/options.h"
 #include "leveldb/slice.h"
 #include "leveldb/status.h"
+#include <cassert>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -46,44 +47,42 @@ leveldb::Status
 DocumentStore::CreateCollection(const std::string &collection_name,
                                 leveldb::Options options,
                                 nlohmann::json &schema) {
-  // explicitly set create_if_missing to true
+
+  // check if collection exists in metadata table. if exists dont do anything
+  leveldb::Status status;
+  nlohmann::json collection_metadata;
+  status = CheckCollectionInRegistry(collection_name, collection_metadata);
+  if (!status.IsNotFound()) {
+    return OpenCollection(collection_name, collection_metadata);
+  }
+
+  // create the database
+  //  explicitly set create_if_missing to true
   options.create_if_missing = true;
   leveldb::DB *db = nullptr;
-  leveldb::Status status =
-      leveldb::DB::Open(options, base_path_ + "/" + collection_name, &db);
+  status = leveldb::DB::Open(options, base_path_ + "/" + collection_name, &db);
   if (!status.ok()) {
     std::cerr << "Failed to create collection " << collection_name << " "
               << status.ToString() << std::endl;
     return status;
+  };
+  nlohmann::json s_options = options.ToJSON();
+  status = ExtendMetadata(s_options, schema, collection_metadata);
+  if (!status.ok()) {
+    std::cerr << "Error at ExtendMetata at CheckCollectionToRegistry "
+              << collection_name << std::endl;
+    return status;
   }
-  // check if collection exists in metadata table, else insert
-  nlohmann::json collection_metadata;
-  status = CheckCollectionInRegistry(collection_name, collection_metadata);
-  if (status.IsNotFound()) {
-    nlohmann::json s_options = options.ToJSON();
-    if (!schema.empty()) {
-      auto status = ExtendMetadata(s_options, schema, collection_metadata);
-      if (!status.ok()) {
-        std::cerr << "Error at ExtendMetata at CheckCollectionToRegistry "
-                  << collection_name << std::endl;
-        return status;
-      }
-    } else {
-      collection_metadata = s_options;
-    }
-
-    status = AddCollectionToRegistry(collection_name, collection_metadata);
-    if (!status.ok()) {
-      std::cerr << "Error at AddCollectionToRegistry " << collection_name
-                << std::endl;
-      return status;
-    }
-  } else if (!status.ok()) {
-    std::cerr << "Unknown error at CheckCollectionRegistry " << collection_name
-              << " " << status.ToString() << std::endl;
+  status = AddCollectionToRegistry(collection_name, collection_metadata);
+  if (!status.ok()) {
+    std::cerr << "Error at AddCollectionToRegistry " << collection_name
+              << std::endl;
+    return status;
   }
   collections_handle_.emplace(
-      collection_name, CollectionHandle{std::unique_ptr<leveldb::DB>(db)});
+      collection_name,
+      CollectionHandle{std::unique_ptr<leveldb::DB>(db), collection_metadata});
+
   return status;
 }
 
@@ -108,10 +107,11 @@ DocumentStore::DropCollection(const std::string &collection_name) {
  */
 leveldb::Status
 DocumentStore::OpenCollection(const std::string &collection_name,
-                              const nlohmann::json &metadata) {
+                              nlohmann::json &metadata) {
   leveldb::Status s;
   leveldb::Options collection_options;
-  collection_options.FromJSON(metadata["options"], s);
+  collection_options = collection_options.FromJSON(metadata["options"], s);
+  collection_options.create_if_missing = false; // disable this
   if (!s.ok()) {
     std::cerr << "Failed to parse collection settings/options  "
               << collection_name << " from registry " << s.ToString()
@@ -141,6 +141,9 @@ DocumentStore::CheckCollectionInRegistry(const std::string &collection_name,
   std::string metadata_buf;
   leveldb::Status s = collection_registry_->Get(leveldb::ReadOptions(),
                                                 collection_name, &metadata_buf);
+  if (!s.ok()) {
+    return s;
+  }
   if (metadata_buf.empty()) {
     return leveldb::Status::NotFound("Collection Name " + collection_name +
                                      "Not Found in metdata table");
@@ -241,6 +244,7 @@ leveldb::Status DocumentStore::Insert(const std::string &collection_name,
   if (!s.ok()) {
     std::cerr << "Failed to insert into collection " << collection_name << ": "
               << s.ToString() << std::endl;
+    return s;
   }
   return s;
 }
@@ -271,6 +275,7 @@ DocumentStore::GetCollectionHandle(const std::string &collection_name,
   if (it != collections_handle_.end()) {
     return &it->second;
   }
+
   nlohmann::json metadata;
   s = CheckCollectionInRegistry(collection_name, metadata);
   if (!s.ok()) {
