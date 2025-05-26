@@ -62,10 +62,8 @@ public:
     std::cout << "RF File PRune: " << this->prunefile << std::endl;
   }
   void print(uint64_t numberofop) {
-    // uint64_t p = 10;
-    // std::cout<<numberofop/p<<std::endl;
     std::cout << "Total IO: " << this->numberofIO << std::endl;
-    std::cout << "Avg IO: " << (double)(this->numberofIO / numberofop)
+    std::cout << "Avg IO: " << (double)this->numberofIO / numberofop
               << std::endl;
     if (numberofIO > 0) {
       double s = (double)cachehit / numberofIO * 100.0;
@@ -87,45 +85,6 @@ public:
               << std::endl;
     std::cout << "Avg RF File Prune: " << this->prunefile / numberofop
               << std::endl;
-  }
-
-  void print(uint64_t numberofop, ofstream &ofile, const char *type) {
-    // uint64_t p = 10;
-    // std::cout<<numberofop/p<<std::endl;
-    ofile << std::fixed;
-    ofile.precision(3);
-
-    if (numberofop == 0)
-      ofile << "Op Type, Total IO, Avg IO, Cache Hit%, BF Prune, BF FP%, Avg "
-               "RF Prune, Avg RF File Prune\n";
-    else {
-      ofile << type << ",";
-      ofile << this->numberofIO << ",";
-
-      ofile << ((double)this->numberofIO / numberofop) << ",";
-
-      if (numberofIO > 0) {
-        double s = (double)cachehit / numberofIO * 100.0;
-
-        ofile << s << ",";
-      } else
-        ofile << "0,";
-
-      ofile << this->prunebloomfilter << ",";
-
-      // cout.precision(6);
-
-      if (this->bloomfilterFP + this->prunebloomfilter > 0)
-        ofile << (double)this->bloomfilterFP /
-                     (double)(this->bloomfilterFP + this->prunebloomfilter) *
-                     100.0;
-      else
-        ofile << "0,";
-      // cout.precision(3);
-      ofile << this->pruneinterval / numberofop << ",";
-
-      ofile << this->prunefile / numberofop << std::endl;
-    }
   }
 };
 

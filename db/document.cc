@@ -71,18 +71,20 @@ DocumentStore::CreateCollection(const std::string &collection_name,
   if (!status.ok()) {
     std::cerr << "Error at ExtendMetata at CheckCollectionToRegistry "
               << collection_name << std::endl;
+    delete db; // close the open database handle.
     return status;
   }
   status = AddCollectionToRegistry(collection_name, collection_metadata);
   if (!status.ok()) {
     std::cerr << "Error at AddCollectionToRegistry " << collection_name
               << std::endl;
+    delete db; // close the open database handle.
     return status;
   }
+
   collections_handle_.emplace(
       collection_name,
       CollectionHandle{std::unique_ptr<leveldb::DB>(db), collection_metadata});
-
   return status;
 }
 
