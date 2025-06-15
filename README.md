@@ -7,21 +7,82 @@ An attempt to build a naive document store over leveldb supporting secondary ind
 3. Ensure CMake is installed
 4. Run the below command to generate a build: 
 ```bash
+sudo apt-get install libbenchmark-dev libgtest-dev
 mkdir -p build && cd build
+# Debug Build Config -> Use during development/testing/debugging
+cmake -DCMAKE_BUILD_TYPE=Debug -DLEVELDB_BUILD_TESTS=ON .. && cmake --build .
+# Release Build Config -> Use for benchmarking
 cmake -DCMAKE_BUILD_TYPE=Release .. && cmake --build .
 ```
 
-## Interface Details
-TODO
+## Interface Details (Extra Functions in addition to LevelDB's Get and Set Method)
+ - Additional Options extended as part of LevelDB Interface
+```cpp
+  string secondary_key;
+  string primary_key;
+  string interval_tree_file_name;
+```
+
+ - `Get` method by secondary key. Pass in a accumulator array of type `SecondayKeyReturnVal` and pass in a number k, to get the top k outputs.
+```cpp
+virtual Status Get(const ReadOptions &options, const Slice &skey,std::vector<SecondayKeyReturnVal> *value,int kNoOfOutputs) = 0;
+```
+
+ - `RangeGet` method by secondary key. Pass in a accumulator array of type `SecondayKeyReturnVal` and pass in a number k, to get the top k outputs.
+
+```cpp
+virtual Status RangeGet(const ReadOptions &options, const Slice &startSkey,const Slice &endSkey,std::vector<SecondayKeyReturnVal> *value int kNoOfOutputs) = 0;
+```
+
+Overloaded `Put` method, pass in a JSON document as a slice, include the primary_key and secondary_key in the document.
+```cpp
+virtual Status Put(const WriteOptions &o, const Slice &val) = 0;
+```
 
 ## Roadmap
-TODO
+ - Investigate Ordering of data during retrieval and calculate performance overhead of sorting.
+ - Add support for indexing on vanilla Key value pairs.
+ - Adding a document interface over nlohmann::json and encapsulating document as a data structure.
+ - Add LRU cache for in-memory database handle
+ - Columnar decomposition of document.
+ - Add a seperate catalog handler to manage collection metadata. 
+ - **Ambitious** - Add support for vector storage using FAISS.
 
 ## Improvements
-TODO
+ - Redundant JSON parsing.
+ - Can we use a lock free data structure to handle in memory collection_handler?
+ - Can we use a SIMD JSON parser to speedup the process?
 
-----------------------------------------------------------------------------------------------------------------------------------------------
-Below attached is the documentation of LevelDB.
+## Benchmark
+```bash
+Running ./document_bench_test
+Run on (8 X 3616.84 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 36608 KiB (x1)
+Load Average: 0.00, 0.00, 0.04
+--------------------------------------------------------------------------
+Benchmark                                Time             CPU   Iterations
+--------------------------------------------------------------------------
+BM_Insert                            11440 ns        11420 ns        62744
+BM_Get                                 510 ns          510 ns      1350203
+BM_BatchInsert/10                   121332 ns       121040 ns         5906
+BM_BatchInsert/64                   761433 ns       760319 ns          936
+BM_BatchInsert/512                 6111398 ns      6101650 ns          117
+BM_BatchInsert/1000               11941148 ns     11927210 ns           60
+BM_ConcurrentOperations/2            49765 ns        33112 ns        20947
+BM_ConcurrentOperations/8           194829 ns       190600 ns         3605
+BM_ConcurrentOperations/32          905211 ns       886623 ns          773
+BM_GetBySecondaryKey                464933 ns       464918 ns         1529
+BM_GetBySecondaryKeyUsingGetAll   17363493 ns     17363367 ns           40
+BM_RangeGetBySecondaryKey          2249902 ns      2249820 ns          311
+BM_RangeGetUsingGetAll            18299938 ns     18299316 ns           39
+BM_GetAll                         16785738 ns     16785631 ns           41
+```
+
+**Below attached is the documentation of LevelDB.**
 # LevelDB:
 A fast key-value storage library written at Google that provides an ordered mapping from string keys to string values.
 
