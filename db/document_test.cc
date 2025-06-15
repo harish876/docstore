@@ -14,7 +14,7 @@
 
 class DocumentStoreTest {
 public:
-  std::string test_dir_ = "/root/docstore/test";
+  std::string test_dir_ = "./test";
   void TearDown() {
     if (std::filesystem::exists(test_dir_)) {
       std::filesystem::remove_all(test_dir_);
@@ -184,7 +184,6 @@ TEST(DocumentStoreTest, ValidateFalseSchema) {
   s = store.ValidateSchema(doc, schema);
 
   ASSERT_TRUE(!s.ok());
-  std::cout << "Invalid Schema Message - " << s.ToString() << " \n";
 
   this->TearDown();
 }

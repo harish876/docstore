@@ -311,10 +311,6 @@ DocumentStore::GetCollectionHandle(const std::string &collection_name,
   nlohmann::json metadata;
   s = CheckCollectionInRegistry(collection_name, metadata);
   if (!s.ok()) {
-    if (s.IsNotFound()) {
-      std::cerr << "Attempt to access collection " << collection_name
-                << " which is not created " << s.ToString() << std::endl;
-    }
     return nullptr;
   }
 
