@@ -10,6 +10,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <shared_mutex>
 
 namespace docstore {
 
@@ -71,6 +72,10 @@ public:
   leveldb::Status ValidateSchema(const nlohmann::json &document,
                                  const nlohmann::json &schema);
 
+  // Get all documents from a collection
+  leveldb::Status GetAll(const std::string &collection_name,
+                        std::vector<nlohmann::json> &documents);
+
 private:
   std::string base_path_;
   // TODO: change to an LRU cache
@@ -78,6 +83,10 @@ private:
   leveldb::Options options_;
   // This is a simple key value store which contains all collections
   std::unique_ptr<leveldb::DB> collection_registry_;
+
+  std::shared_mutex collections_mutex_;  // For collections_handle_ map
+  std::mutex registry_mutex_;            // For collection_registry_ operations
+
   bool validate_type(nlohmann::basic_json<> &document_value, std::string &type);
 };
 } // namespace docstore

@@ -251,6 +251,33 @@ if (LEVELDB_BUILD_TESTS)
     endforeach()
 endif()
 
+# Add document store benchmark
+add_executable(document_bench_test db/document_bench_test.cc)
+target_link_libraries(document_bench_test
+    PRIVATE 
+    docstore 
+    benchmark 
+    Threads::Threads
+    nlohmann_json::nlohmann_json
+    GTest::GTest
+    GTest::Main
+)
+
+# Find and add Google Benchmark
+find_package(benchmark REQUIRED)
+if(NOT benchmark_FOUND)
+    # If not found in system, use the bundled version
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(BENCHMARK_ENABLE_EXCEPTIONS OFF CACHE BOOL "" FORCE)
+    add_subdirectory("third_party/benchmark")
+endif()
+
+# Find and add Google Test
+find_package(GTest REQUIRED)
+if(NOT GTest_FOUND)
+    message(FATAL_ERROR "Google Test not found. Please install GTest.")
+endif()
+
 # Benchmarks
 if(LEVELDB_BUILD_BENCHMARKS)
   # Add the Google benchmark library
@@ -278,7 +305,15 @@ if(LEVELDB_BUILD_BENCHMARKS)
       "${bench_file}"
     )
     
-    target_link_libraries("${bench_target_name}" docstore benchmark Threads::Threads)
+    target_link_libraries("${bench_target_name}" 
+      PRIVATE 
+      docstore 
+      benchmark 
+      Threads::Threads
+      nlohmann_json::nlohmann_json
+      GTest::GTest
+      GTest::Main
+    )
     
     target_compile_definitions("${bench_target_name}"
       PRIVATE
@@ -288,6 +323,9 @@ if(LEVELDB_BUILD_BENCHMARKS)
 
   # Main LevelDB benchmarks
   #leveldb_benchmark("db/db_bench.cc")
+  
+  # Add document store benchmark
+  leveldb_benchmark("db/document_bench_test.cc")
   
   # Add other custom benchmarks if you have them
   # Example: leveldb_benchmark("benchmarks/db_index.cc")

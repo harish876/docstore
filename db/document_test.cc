@@ -5,9 +5,12 @@
 #include "leveldb/status.h"
 #include "nlohmann/json_fwd.hpp"
 #include "util/testharness.h"
+#include <atomic>
 #include <cassert>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <thread>
+#include <algorithm>
 
 class DocumentStoreTest {
 public:
@@ -381,7 +384,9 @@ TEST(DocumentStoreTest, PutAndGetQueryDocument) {
   s = store.Get("users", "5", value);
   ASSERT_TRUE(s.ok());
 
-  nlohmann::json retrieved_doc = nlohmann::json::parse(value);
+  auto parse_result = nlohmann::json::parse(value, nullptr, false);
+  ASSERT_TRUE(!parse_result.is_discarded());
+  nlohmann::json retrieved_doc = parse_result;
   ASSERT_TRUE(retrieved_doc["user_age"] == 25);
   ASSERT_TRUE(retrieved_doc["user_name"] == "user_5");
 
@@ -476,6 +481,143 @@ TEST(DocumentStoreTest, PersistAndRetrieveCollection) {
     ASSERT_TRUE(metadata.contains("options"));
     ASSERT_TRUE(metadata.contains("schema"));
   }
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, ConcurrentOperations) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+
+  leveldb::Options options;
+  options.primary_key = "user_id";
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": ["user_id", "user_name"]
+    }
+  )"_json;
+
+  s = store.CreateCollection("users", options, schema);
+  ASSERT_TRUE(s.ok());
+
+  std::vector<std::thread> put_threads;
+  std::atomic<int> success_count{0};
+  std::atomic<int> fail_count{0};
+
+  for (int i = 0; i < 10; i++) {
+    put_threads.emplace_back([&store, i, &success_count, &fail_count]() {
+      nlohmann::json doc;
+      doc["user_id"] = i;
+      doc["user_name"] = "user_" + std::to_string(i);
+
+      leveldb::Status s = store.Insert("users", doc);
+      if (s.ok()) {
+        success_count++;
+      } else {
+        fail_count++;
+      }
+    });
+  }
+
+  for (auto &thread : put_threads) {
+    thread.join();
+  }
+
+  ASSERT_EQ(success_count, 10);
+  ASSERT_EQ(fail_count, 0);
+
+  std::vector<std::thread> get_threads;
+  std::atomic<int> get_success_count{0};
+  std::atomic<int> get_fail_count{0};
+
+  for (int i = 0; i < 20; i++) {
+    get_threads.emplace_back([&store, i, &get_success_count,
+                              &get_fail_count]() {
+      std::string value;
+      int doc_id = i % 10;
+      leveldb::Status s = store.Get("users", std::to_string(doc_id), value);
+
+      if (s.ok() || s.IsNotFound()) {
+        auto parse_result = nlohmann::json::parse(value, nullptr, false);
+        if (!parse_result.is_discarded()) {
+          nlohmann::json retrieved_doc = parse_result;
+          if (retrieved_doc["user_name"] == "user_" + std::to_string(doc_id)) {
+            get_success_count++;
+          } else {
+            get_fail_count++;
+          }
+        } else {
+          get_fail_count++;
+        }
+      } else {
+        get_fail_count++;
+      }
+    });
+  }
+
+  for (auto &thread : get_threads) {
+    thread.join();
+  }
+
+  ASSERT_EQ(get_success_count, 20);
+  ASSERT_EQ(get_fail_count, 0);
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, GetAllDocuments) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+
+  leveldb::Options options;
+  options.primary_key = "user_id";
+  options.secondary_key = "user_age";
+
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": ["user_id", "user_age", "user_name"]
+    }
+  )"_json;
+
+  s = store.CreateCollection("users", options, schema);
+  ASSERT_TRUE(s.ok());
+
+  // Insert 10 test documents
+  for (int i = 1; i <= 10; ++i) {
+    nlohmann::json doc;
+    doc["user_id"] = i;
+    doc["user_age"] = 20 + i;
+    doc["user_name"] = "user_" + std::to_string(i);
+
+    s = store.Insert("users", doc);
+    ASSERT_TRUE(s.ok());
+  }
+
+  std::vector<nlohmann::json> documents;
+  s = store.GetAll("users", documents);
+  ASSERT_TRUE(s.ok());
+  
+  // Verify we got all 10 documents
+  ASSERT_EQ(documents.size(), 10);
+
+
+  std::vector<nlohmann::json> empty_docs;
+  s = store.GetAll("non_existent", empty_docs);
+  ASSERT_TRUE(!s.ok());
+  ASSERT_TRUE(empty_docs.empty());
 
   this->TearDown();
 }
