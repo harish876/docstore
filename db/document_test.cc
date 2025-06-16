@@ -621,6 +621,78 @@ TEST(DocumentStoreTest, GetAllDocuments) {
   this->TearDown();
 }
 
+TEST(DocumentStoreTest, SimulateSIGKILLAndRecovery) {
+  leveldb::Status s;
+  std::string test_dir = this->test_dir_ + "/sigkill_test";
+  
+  // First create and populate the database
+  {
+    docstore::DocumentStore store(test_dir, s);
+    ASSERT_TRUE(s.ok());
+
+    leveldb::Options options;
+    options.primary_key = "user_id";
+    options.secondary_key = "user_age";
+    options.paranoid_checks = true;  // Enable paranoid checks for better recovery
+
+    nlohmann::json schema;
+    schema = R"(
+      {
+        "fields": [
+          {"user_id": "integer"},
+          {"user_age": "integer"},
+          {"user_name": "string"}
+        ],
+        "required": ["user_id", "user_age", "user_name"]
+      }
+    )"_json;
+
+    s = store.CreateCollection("users2", options, schema);
+    ASSERT_TRUE(s.ok());
+
+    // Insert some test data
+    for (int i = 1; i <= 5; ++i) {
+      nlohmann::json doc;
+      doc["user_id"] = i;
+      doc["user_age"] = 20 + i;
+      doc["user_name"] = "user_" + std::to_string(i);
+
+      s = store.Insert("users2", doc);
+      ASSERT_TRUE(s.ok());
+    }
+  }
+
+
+  {
+    docstore::DocumentStore store(test_dir, s);
+    ASSERT_TRUE(s.ok());
+
+    std::vector<nlohmann::json> documents;
+    s = store.GetAll("users2", documents);
+    if(!s.ok()){
+      std::cout << "Error in GetAll: " << s.ToString() << std::endl;
+    }
+    
+    ASSERT_TRUE(s.ok());
+    ASSERT_EQ(documents.size(), 5);
+
+    nlohmann::json new_doc;
+    new_doc["user_id"] = 6;
+    new_doc["user_age"] = 26;
+    new_doc["user_name"] = "user_6";
+
+    s = store.Insert("users2", new_doc);
+    ASSERT_TRUE(s.ok());
+
+    documents.clear();
+    s = store.GetAll("users2", documents);
+    ASSERT_TRUE(s.ok());
+    ASSERT_EQ(documents.size(), 6);
+  }
+
+  this->TearDown();
+}
+
 } // namespace docstore
 
 int main(int argc, char **argv) { return leveldb::test::RunAllTests(); }

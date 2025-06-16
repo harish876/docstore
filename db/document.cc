@@ -32,10 +32,15 @@ DocumentStore::DocumentStore(const std::string &base_path, leveldb::Status &s)
               << std::endl;
     return;
   }
-
   collection_registry_ = std::unique_ptr<leveldb::DB>(db);
+
   // we will lazily populate the collection_ map when we recieve a
   // CreateCollection or a Insert/Update/Get query
+}
+
+DocumentStore::~DocumentStore() {
+  collections_handle_.clear();
+  collection_registry_.reset();
 }
 
 /**
@@ -48,9 +53,6 @@ leveldb::Status
 DocumentStore::CreateCollection(const std::string &collection_name,
                                 leveldb::Options options,
                                 nlohmann::json &schema) {
-  // Use exclusive lock for collection creation
-  std::unique_lock<std::shared_mutex> collections_lock(collections_mutex_);
-
   // check if collection exists in metadata table. if exists dont do anything
   leveldb::Status status;
   nlohmann::json collection_metadata;
@@ -60,7 +62,6 @@ DocumentStore::CreateCollection(const std::string &collection_name,
   }
 
   // create the database
-  //  explicitly set create_if_missing to true
   options.create_if_missing = true;
   leveldb::DB *db = nullptr;
   status = leveldb::DB::Open(options, base_path_ + "/" + collection_name, &db);
@@ -68,20 +69,22 @@ DocumentStore::CreateCollection(const std::string &collection_name,
     std::cerr << "Failed to create collection " << collection_name << " "
               << status.ToString() << std::endl;
     return status;
-  };
+  }
+
   nlohmann::json s_options = options.ToJSON();
   status = ExtendMetadata(s_options, schema, collection_metadata);
   if (!status.ok()) {
     std::cerr << "Error at ExtendMetata at CheckCollectionToRegistry "
               << collection_name << std::endl;
-    delete db; // close the open database handle.
+    delete db;
     return status;
   }
+
   status = AddCollectionToRegistry(collection_name, collection_metadata);
   if (!status.ok()) {
     std::cerr << "Error at AddCollectionToRegistry " << collection_name
               << std::endl;
-    delete db; // close the open database handle.
+    delete db;
     return status;
   }
 
@@ -112,43 +115,44 @@ DocumentStore::DropCollection(const std::string &collection_name) {
 leveldb::Status
 DocumentStore::OpenCollection(const std::string &collection_name,
                               nlohmann::json &metadata) {
-  // Use exclusive lock for collection opening
-  std::unique_lock<std::shared_mutex> collections_lock(collections_mutex_);
+  // check if collection exists in metadata table
+  leveldb::Status status;
+  status = CheckCollectionInRegistry(collection_name, metadata);
+  if (status.IsNotFound()) {
+    return status; // Collection doesn't exist in registry
+  }
 
-  leveldb::Status s;
+  // create the database
   leveldb::Options collection_options;
-  collection_options = collection_options.FromJSON(metadata["options"], s);
+  collection_options = collection_options.FromJSON(metadata["options"], status);
   collection_options.create_if_missing = false; // disable this
-  if (!s.ok()) {
+
+  if (!status.ok()) {
     std::cerr << "Failed to parse collection settings/options  "
-              << collection_name << " from registry " << s.ToString()
+              << collection_name << " from registry " << status.ToString()
               << std::endl;
-    return s;
+    return status;
   }
 
   leveldb::DB *db = nullptr;
-  s = leveldb::DB::Open(collection_options, base_path_ + "/" + collection_name,
-                        &db);
-  if (!s.ok()) {
+  status = leveldb::DB::Open(collection_options,
+                             base_path_ + "/" + collection_name, &db);
+  if (!status.ok()) {
     std::cerr << "Unable to open registered collection " << collection_name
-              << " " << s.ToString() << std::endl;
-    return s;
+              << " " << status.ToString() << std::endl;
+    return status;
   }
 
   collections_handle_.emplace(
       collection_name,
       CollectionHandle{std::unique_ptr<leveldb::DB>(db), metadata});
-  return s;
+  return status;
 }
 
 leveldb::Status
 DocumentStore::CheckCollectionInRegistry(const std::string &collection_name,
                                          nlohmann::json &metadata) {
   assert(collection_registry_ != nullptr);
-  
-  // Add registry mutex protection
-  std::lock_guard<std::mutex> registry_lock(registry_mutex_);
-  
   std::string metadata_buf;
   leveldb::Status s = collection_registry_->Get(leveldb::ReadOptions(),
                                                 collection_name, &metadata_buf);
@@ -163,12 +167,12 @@ DocumentStore::CheckCollectionInRegistry(const std::string &collection_name,
     auto parse_result = nlohmann::json::parse(metadata_buf, nullptr, false);
     if (parse_result.is_discarded()) {
       return leveldb::Status::NotFound("Invalid metadata stored - ",
-                                     collection_name);
+                                       collection_name);
     }
     metadata = parse_result;
   } catch (const nlohmann::json::parse_error &e) {
     return leveldb::Status::NotFound("Invalid metadata stored - ",
-                                   collection_name);
+                                     collection_name);
   }
   return s;
 }
@@ -177,10 +181,6 @@ leveldb::Status
 DocumentStore::AddCollectionToRegistry(const std::string &collection_name,
                                        nlohmann::json &metadata) {
   assert(collection_registry_ != nullptr);
-  
-  // Add registry mutex protection
-  std::lock_guard<std::mutex> registry_lock(registry_mutex_);
-  
   leveldb::Status s = collection_registry_->Put(
       leveldb::WriteOptions(), collection_name, metadata.dump());
   if (!s.ok()) {
@@ -290,20 +290,7 @@ leveldb::Status DocumentStore::Insert(const std::string &collection_name,
 CollectionHandle *
 DocumentStore::GetCollectionHandle(const std::string &collection_name,
                                    leveldb::Status &s) {
-  // Use shared lock for collection handle access
-  std::shared_lock<std::shared_mutex> collections_lock(collections_mutex_);
-
   auto it = collections_handle_.find(collection_name);
-  if (it != collections_handle_.end()) {
-    return &it->second;
-  }
-
-  // Need to upgrade to exclusive lock for collection creation
-  collections_lock.unlock();
-  std::unique_lock<std::shared_mutex> write_lock(collections_mutex_);
-
-  // Double check after acquiring write lock
-  it = collections_handle_.find(collection_name);
   if (it != collections_handle_.end()) {
     return &it->second;
   }
@@ -433,7 +420,7 @@ bool DocumentStore::isValidJSON(const nlohmann::json &document) {
 }
 
 leveldb::Status DocumentStore::GetAll(const std::string &collection_name,
-                                    std::vector<nlohmann::json> &documents) {
+                                      std::vector<nlohmann::json> &documents) {
   leveldb::Status s;
   CollectionHandle *collection_handle = GetCollectionHandle(collection_name, s);
   if (!collection_handle || (collection_handle && !collection_handle->db_)) {
@@ -442,10 +429,11 @@ leveldb::Status DocumentStore::GetAll(const std::string &collection_name,
 
   std::unique_ptr<leveldb::Iterator> it(
       collection_handle->db_->NewIterator(leveldb::ReadOptions()));
-  
+
   for (it->SeekToFirst(); it->Valid(); it->Next()) {
     nlohmann::json doc;
-    auto parse_result = nlohmann::json::parse(it->value().ToString(), nullptr, false);
+    auto parse_result =
+        nlohmann::json::parse(it->value().ToString(), nullptr, false);
     if (parse_result.is_discarded()) {
       std::cerr << "Failed to parse document" << std::endl;
       continue;
@@ -460,7 +448,5 @@ leveldb::Status DocumentStore::GetAll(const std::string &collection_name,
 
   return s;
 }
-
-DocumentStore::~DocumentStore() {}
 
 } // namespace docstore

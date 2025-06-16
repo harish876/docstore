@@ -11,6 +11,8 @@
 #include <unordered_map>
 #include <vector>
 #include <shared_mutex>
+#include <map>
+#include <mutex>
 
 namespace docstore {
 
@@ -78,14 +80,9 @@ public:
 
 private:
   std::string base_path_;
-  // TODO: change to an LRU cache
-  std::unordered_map<std::string, CollectionHandle> collections_handle_;
-  leveldb::Options options_;
-  // This is a simple key value store which contains all collections
   std::unique_ptr<leveldb::DB> collection_registry_;
-
-  std::shared_mutex collections_mutex_;  // For collections_handle_ map
-  std::mutex registry_mutex_;            // For collection_registry_ operations
+  std::map<std::string, CollectionHandle> collections_handle_;
+  leveldb::Options options_;
 
   bool validate_type(nlohmann::basic_json<> &document_value, std::string &type);
 };
