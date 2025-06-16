@@ -13,6 +13,7 @@
 #include <shared_mutex>
 #include <map>
 #include <mutex>
+#include <iostream>
 
 namespace docstore {
 
@@ -70,13 +71,21 @@ public:
   leveldb::Status AddCollectionToRegistry(const string &collection_name,
                                           nlohmann::json &metadata);
   leveldb::Status OpenCollection(const std::string &collection_name,
-                                 nlohmann::json &metadata);
+                                 const nlohmann::json &metadata);
   leveldb::Status ValidateSchema(const nlohmann::json &document,
                                  const nlohmann::json &schema);
 
   // Get all documents from a collection
   leveldb::Status GetAll(const std::string &collection_name,
                         std::vector<nlohmann::json> &documents);
+
+  // Debug method to print all collections in the handle map
+  void PrintCollections() const {
+    std::cout << "Collections in handle map:" << std::endl;
+    for (const auto &pair : collections_handle_) {
+      std::cout << "Collection: " << pair.first << std::endl;
+    }
+  }
 
 private:
   std::string base_path_;

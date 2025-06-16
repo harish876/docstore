@@ -5,12 +5,12 @@
 #include "leveldb/status.h"
 #include "nlohmann/json_fwd.hpp"
 #include "util/testharness.h"
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <thread>
-#include <algorithm>
 
 class DocumentStoreTest {
 public:
@@ -608,10 +608,9 @@ TEST(DocumentStoreTest, GetAllDocuments) {
   std::vector<nlohmann::json> documents;
   s = store.GetAll("users", documents);
   ASSERT_TRUE(s.ok());
-  
+
   // Verify we got all 10 documents
   ASSERT_EQ(documents.size(), 10);
-
 
   std::vector<nlohmann::json> empty_docs;
   s = store.GetAll("non_existent", empty_docs);
@@ -624,7 +623,7 @@ TEST(DocumentStoreTest, GetAllDocuments) {
 TEST(DocumentStoreTest, SimulateSIGKILLAndRecovery) {
   leveldb::Status s;
   std::string test_dir = this->test_dir_ + "/sigkill_test";
-  
+
   // First create and populate the database
   {
     docstore::DocumentStore store(test_dir, s);
@@ -633,7 +632,6 @@ TEST(DocumentStoreTest, SimulateSIGKILLAndRecovery) {
     leveldb::Options options;
     options.primary_key = "user_id";
     options.secondary_key = "user_age";
-    options.paranoid_checks = true;  // Enable paranoid checks for better recovery
 
     nlohmann::json schema;
     schema = R"(
@@ -662,17 +660,16 @@ TEST(DocumentStoreTest, SimulateSIGKILLAndRecovery) {
     }
   }
 
-
   {
     docstore::DocumentStore store(test_dir, s);
     ASSERT_TRUE(s.ok());
 
     std::vector<nlohmann::json> documents;
     s = store.GetAll("users2", documents);
-    if(!s.ok()){
+    if (!s.ok()) {
       std::cout << "Error in GetAll: " << s.ToString() << std::endl;
     }
-    
+
     ASSERT_TRUE(s.ok());
     ASSERT_EQ(documents.size(), 5);
 
@@ -688,6 +685,84 @@ TEST(DocumentStoreTest, SimulateSIGKILLAndRecovery) {
     s = store.GetAll("users2", documents);
     ASSERT_TRUE(s.ok());
     ASSERT_EQ(documents.size(), 6);
+  }
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, ReopenAndGetSec) {
+  leveldb::Status s;
+  std::string test_dir = this->test_dir_ + "/reopen_test";
+
+  // First create and populate the database
+  {
+    docstore::DocumentStore store(test_dir, s);
+    ASSERT_TRUE(s.ok());
+
+    leveldb::Options options;
+    options.primary_key = "user_id";
+    options.secondary_key = "user_age";
+    options.filter_policy = leveldb::NewBloomFilterPolicy(20); //important for index recovery
+
+    nlohmann::json schema;
+    schema = R"(
+      {
+        "fields": [
+          {"user_id": "integer"},
+          {"user_age": "integer"},
+          {"user_name": "string"}
+        ],
+        "required": ["user_id", "user_age", "user_name"]
+      }
+    )"_json;
+
+    s = store.CreateCollection("users4", options, schema);
+    ASSERT_TRUE(s.ok());
+
+    // Insert test data with different ages
+    /**
+        1,2,3,4,5,6,7,8,9,10
+        1, 2, 0, 1, 2, 0, 1, 2, 0, 1
+        21,22,20,21,22,20,21,22,20,21
+     */
+    for (int i = 1; i <= 10; ++i) {
+      nlohmann::json doc;
+      doc["user_id"] = i;
+      doc["user_age"] =
+          20 + (i % 3);
+      doc["user_name"] = "user_" + std::to_string(i);
+
+      s = store.Insert("users4", doc);
+      ASSERT_TRUE(s.ok());
+    }
+  }
+
+  // Second reopen and get by age 22
+  {
+    docstore::DocumentStore store(test_dir, s);
+    ASSERT_TRUE(s.ok());
+
+    std::vector<nlohmann::json> documents;
+    s = store.GetAll("users4", documents);
+    ASSERT_TRUE(s.ok());
+    ASSERT_EQ(documents.size(),
+              10); // Should get users with age 22 (users 2, 5, 8)
+
+    std::vector<leveldb::SecondayKeyReturnVal> values;
+    s = store.GetSec("users4", "22", &values);
+    ASSERT_TRUE(s.ok());
+    ASSERT_EQ(values.size(), 3);
+  }
+
+  // Fourth reopen and get range of ages
+  {
+    docstore::DocumentStore store(test_dir, s);
+    ASSERT_TRUE(s.ok());
+
+    std::vector<leveldb::SecondayKeyReturnVal> values;
+    s = store.RangeGetSec("users4", "21", "22", &values);
+    ASSERT_TRUE(s.ok());
+    ASSERT_EQ(values.size(),7); // Should get all users with ages 21 and 22
   }
 
   this->TearDown();

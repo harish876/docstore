@@ -114,16 +114,10 @@ DocumentStore::DropCollection(const std::string &collection_name) {
  */
 leveldb::Status
 DocumentStore::OpenCollection(const std::string &collection_name,
-                              nlohmann::json &metadata) {
-  // check if collection exists in metadata table
-  leveldb::Status status;
-  status = CheckCollectionInRegistry(collection_name, metadata);
-  if (status.IsNotFound()) {
-    return status; // Collection doesn't exist in registry
-  }
-
+                              const nlohmann::json &metadata) {
   // create the database
   leveldb::Options collection_options;
+  leveldb::Status status;
   collection_options = collection_options.FromJSON(metadata["options"], status);
   collection_options.create_if_missing = false; // disable this
 
@@ -146,6 +140,7 @@ DocumentStore::OpenCollection(const std::string &collection_name,
   collections_handle_.emplace(
       collection_name,
       CollectionHandle{std::unique_ptr<leveldb::DB>(db), metadata});
+  
   return status;
 }
 
@@ -210,14 +205,15 @@ leveldb::Status DocumentStore::GetSec(
     std::vector<leveldb::SecondayKeyReturnVal> *value, int top_k) {
   leveldb::Status s;
   CollectionHandle *collection_db = GetCollectionHandle(collection_name, s);
-  if (!collection_db || (collection_db && !collection_db->db_)) {
+  if (!collection_db) {
+    std::cout << "Collection handle not found in registry. This should not happen" << std::endl;
     return s.NotFound(
         "Collection handle not found in registry. This should not happen");
   }
   s = (collection_db->db_)
           ->Get(leveldb::ReadOptions(), secondary_key, value, top_k);
   if (!s.ok()) {
-    std::cerr << "Failed to insert into collection " << collection_name << ": "
+    std::cerr << "Failed to get secondary key from collection " << collection_name << ": "
               << s.ToString() << std::endl;
   }
   return s;
@@ -237,7 +233,7 @@ leveldb::Status DocumentStore::RangeGetSec(
           ->RangeGet(leveldb::ReadOptions(), secondary_start_key,
                      secondary_end_key, value, top_k);
   if (!s.ok()) {
-    std::cerr << "Failed to insert into collection " << collection_name << ": "
+    std::cerr << "Failed to range get secondary key from collection " << collection_name << ": "
               << s.ToString() << std::endl;
   }
   return s;
@@ -298,11 +294,15 @@ DocumentStore::GetCollectionHandle(const std::string &collection_name,
   nlohmann::json metadata;
   s = CheckCollectionInRegistry(collection_name, metadata);
   if (!s.ok()) {
+    std::cerr << "Failed to get collection metadata " << collection_name << ": "
+              << s.ToString() << std::endl;
     return nullptr;
   }
 
   s = OpenCollection(collection_name, metadata);
   if (!s.ok()) {
+    std::cerr << "Failed to open collection " << collection_name << ": "
+              << s.ToString() << std::endl;
     return nullptr;
   }
 
