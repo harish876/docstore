@@ -1192,7 +1192,7 @@ Status DBImpl::Get(const ReadOptions &options, const Slice &skey,
 
     std::unordered_set<std::string> resultSetofKeysFound;
 
-    // SECONDARY MEMTABLE
+    // SECONDARY MEMTABLE -> Based on the paper
     mem->Get(skey, snapshot, value, &s, &resultSetofKeysFound, kNoOfOutputs);
 
     if (imm != NULL && kNoOfOutputs - value->size() > 0) {

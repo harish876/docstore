@@ -367,6 +367,10 @@ TEST(DocumentStoreTest, PutAndGetQueryDocument) {
   )"_json;
 
   s = store.CreateCollection("users", options, schema);
+  /**
+     - users folder -> .ldb, log, lock
+     - users_1 folder -> .ldb, log, lock
+  */
   ASSERT_TRUE(s.ok());
 
   for (int i = 1; i <= 10; ++i) {
@@ -429,11 +433,13 @@ TEST(DocumentStoreTest, PutAndGetQueryDocumentWithSecIndex) {
 
   std::vector<leveldb::SecondayKeyReturnVal> secondary_values;
   s = store.GetSec("users", "30", &secondary_values, 1000);
+  //SELECT * from users where user_age = 30
   ASSERT_TRUE(s.ok());
   ASSERT_TRUE(secondary_values.size() == 1);
 
   secondary_values.clear();
   s = store.RangeGetSec("users", "21", "30", &secondary_values, 1000);
+  //SELECT * from users where user_age between 21 and 30
   ASSERT_TRUE(s.ok());
 
   ASSERT_TRUE(secondary_values.size() == 10);

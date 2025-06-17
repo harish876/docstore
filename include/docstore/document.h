@@ -78,6 +78,8 @@ public:
   // Get all documents from a collection
   leveldb::Status GetAll(const std::string &collection_name,
                         std::vector<nlohmann::json> &documents);
+  leveldb::Status GetRange(const std::string &collection_name, const std::string& min_key, const std::string& max_key,
+                        std::vector<nlohmann::json> &documents);
 
   // Debug method to print all collections in the handle map
   void PrintCollections() const {

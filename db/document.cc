@@ -449,4 +449,36 @@ leveldb::Status DocumentStore::GetAll(const std::string &collection_name,
   return s;
 }
 
+leveldb::Status DocumentStore::GetRange(const std::string &collection_name,
+                                        const std::string &start_key,
+                                        const std::string &end_key,
+                                        std::vector<nlohmann::json> &documents) {
+  leveldb::Status s;
+  CollectionHandle *collection_handle = GetCollectionHandle(collection_name, s);
+  if (!collection_handle || (collection_handle && !collection_handle->db_)) {
+    return s.NotFound("Collection handle not found in registry");
+  }
+
+  std::unique_ptr<leveldb::Iterator> it(
+      collection_handle->db_->NewIterator(leveldb::ReadOptions()));
+
+  for (it->Seek(start_key); it->Valid() && it->key().ToString() <= end_key; it->Next()) {
+    nlohmann::json doc;
+    auto parse_result =
+        nlohmann::json::parse(it->value().ToString(), nullptr, false);
+    if (parse_result.is_discarded()) {
+      std::cerr << "Failed to parse document" << std::endl;
+      continue;
+    }
+    documents.push_back(parse_result);
+  }
+
+  s = it->status();
+  if (!s.ok()) {
+    std::cerr << "Error during iteration: " << s.ToString() << std::endl;
+  }
+
+  return s;
+}
+
 } // namespace docstore
