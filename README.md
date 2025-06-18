@@ -55,6 +55,34 @@ virtual Status Put(const WriteOptions &o, const Slice &val) = 0;
 
 ## Benchmark
 ```bash
+Type Release Build
+Running ./document_bench_test
+Run on (8 X 3627.58 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x4)
+  L1 Instruction 32 KiB (x4)
+  L2 Unified 1024 KiB (x4)
+  L3 Unified 36608 KiB (x1)
+Load Average: 0.72, 0.32, 0.12
+--------------------------------------------------------------------------
+Benchmark                                Time             CPU   Iterations
+--------------------------------------------------------------------------
+BM_Insert                            11353 ns        11315 ns        62936
+BM_Get                                 479 ns          479 ns      1460172
+BM_BatchInsert/10                   118322 ns       118009 ns         5943
+BM_BatchInsert/64                   749499 ns       748055 ns          943
+BM_BatchInsert/512                 6042791 ns      6026816 ns          118
+BM_BatchInsert/1000               11789735 ns     11775907 ns           60
+BM_ConcurrentOperations/2            49664 ns        33256 ns        20751
+BM_ConcurrentOperations/8           195507 ns       190854 ns         3657
+BM_ConcurrentOperations/32          908975 ns       890216 ns          779
+BM_GetBySecondaryKey                457825 ns       457816 ns         1528
+BM_GetBySecondaryKeyUsingGetAll   17272831 ns     17272352 ns           41
+BM_RangeGetBySecondaryKey          2227188 ns      2227147 ns          314
+BM_RangeGetUsingGetAll            18127053 ns     18125072 ns           39
+BM_GetAll                         16907965 ns     16906466 ns           41
+
+Type Debug Build
 Running ./document_bench_test
 Run on (8 X 3616.84 MHz CPU s)
 CPU Caches:

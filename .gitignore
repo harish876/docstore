@@ -12,3 +12,4 @@ writeSec
 build*
 test*
 .env
+release-build
