@@ -51,6 +51,13 @@ void Footer::EncodeTo(std::string* dst, bool interval) const {
   else
 	  dst->resize(2 * BlockHandle::kMaxEncodedLength);  // Padding
 
+  // NEW: Encode multiple interval blocks
+  PutVarint32(dst, static_cast<uint32_t>(multi_interval_handles_.size()));
+  for (const auto& [key, handle] : multi_interval_handles_) {
+    PutLengthPrefixedSlice(dst, Slice(key));
+    handle.EncodeTo(dst);
+  }
+
   PutFixed32(dst, static_cast<uint32_t>(kTableMagicNumber & 0xffffffffu));
   PutFixed32(dst, static_cast<uint32_t>(kTableMagicNumber >> 32));
   if(!interval)
@@ -67,6 +74,27 @@ Status Footer::DecodeFrom(Slice* input, bool interval) {
 	  else
 		magic_ptr = input->data() + kEncodedLength + BlockHandle::kMaxEncodedLength - 8;
 
+  // NEW: Find magic number after multiple interval blocks
+  // We need to scan backwards to find the magic number
+  const char* data = input->data();
+  size_t data_size = input->size();
+  
+  // Start from the end and scan backwards for magic number
+  size_t magic_offset = data_size - 8;
+  while (magic_offset >= 8) {
+    const uint32_t magic_lo = DecodeFixed32(data + magic_offset);
+    const uint32_t magic_hi = DecodeFixed32(data + magic_offset + 4);
+    const uint64_t magic = ((static_cast<uint64_t>(magic_hi) << 32) |
+                            (static_cast<uint64_t>(magic_lo)));
+    if (magic == kTableMagicNumber) {
+      break;
+    }
+    magic_offset--;
+  }
+  
+  if (magic_offset < 8) {
+    return Status::InvalidArgument("not an sstable (bad magic number)");
+  }
 
   //const char* magic_ptr = input->data() + kEncodedLength - 8;
   const uint32_t magic_lo = DecodeFixed32(magic_ptr);
@@ -89,6 +117,28 @@ Status Footer::DecodeFrom(Slice* input, bool interval) {
 
 	  }
 	}
+  
+  // NEW: Decode multiple interval blocks
+  if (result.ok()) {
+    uint32_t num_interval_blocks;
+    if (GetVarint32(input, &num_interval_blocks)) {
+      for (uint32_t i = 0; i < num_interval_blocks; i++) {
+        Slice key_slice;
+        if (GetLengthPrefixedSlice(input, &key_slice)) {
+          std::string key = key_slice.ToString();
+          BlockHandle handle;
+          if (handle.DecodeFrom(input).ok()) {
+            multi_interval_handles_[key] = handle;
+          } else {
+            return Status::Corruption("bad multi-interval block handle");
+          }
+        } else {
+          return Status::Corruption("bad multi-interval block key");
+        }
+      }
+    }
+  }
+  
   if (result.ok()) {
     // We skip over any leftover data (just padding for now) in "input"
     const char* end = magic_ptr + 8;

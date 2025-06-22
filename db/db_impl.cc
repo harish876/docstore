@@ -124,7 +124,7 @@ DBImpl::DBImpl(const Options &raw_options, const std::string &dbname)
       owns_cache_(options_.block_cache != raw_options.block_cache),
       dbname_(dbname), db_lock_(NULL), shutting_down_(NULL), bg_cv_(&mutex_),
       // SECONDARY MEMTABLE
-      mem_(new MemTable(internal_comparator_, raw_options.secondary_key)),
+      mem_(new MemTable(internal_comparator_, raw_options.secondary_keys)),
 
       imm_(NULL), logfile_(NULL), logfile_number_(0), log_(NULL), seed_(0),
       tmp_batch_(new WriteBatch), bg_compaction_scheduled_(false),
@@ -1202,7 +1202,7 @@ Status DBImpl::Get(const ReadOptions &options, const Slice &skey,
 
     if (kNoOfOutputs > (int)(value->size())) {
       s = current->Get(options, lkey, value, &stats,
-                       this->options_.secondary_key, kNoOfOutputs,
+                      this->options_.secondary_key, kNoOfOutputs,
                        &resultSetofKeysFound, this);
     }
     mutex_.Lock();
@@ -1268,6 +1268,128 @@ Status DBImpl::RangeGet(const ReadOptions &options, const Slice &startSkey,
                                  endSkey.ToString(), value, &stats,
                                  this->options_.secondary_key, kNoOfOutputs,
                                  &resultSetofKeysFound, this, snapshot);
+    }
+    mutex_.Lock();
+  }
+
+  if (have_stat_update && current->UpdateStats(stats)) {
+    MaybeScheduleCompaction();
+  }
+  mem->Unref();
+  if (imm != NULL)
+    imm->Unref();
+  current->Unref();
+  return s;
+}
+
+Status DBImpl::GetBySecondaryKey(const ReadOptions &options, std::string attribute,
+                                 const Slice &skey,
+                                 std::vector<SecondayKeyReturnVal> *value,
+                                 int kNoOfOutputs) {
+  Status s;
+  MutexLock l(&mutex_);
+  SequenceNumber snapshot;
+  if (options.snapshot != NULL) {
+    snapshot =
+        reinterpret_cast<const SnapshotImpl *>(options.snapshot)->number_;
+  } else {
+    snapshot = versions_->LastSequence();
+  }
+
+  MemTable *mem = mem_;
+  MemTable *imm = imm_;
+  Version *current = versions_->current();
+  mem->Ref();
+  if (imm != NULL)
+    imm->Ref();
+  current->Ref();
+
+  bool have_stat_update = false;
+  Version::GetStats stats;
+
+  // Unlock while reading from files and memtables
+  {
+    mutex_.Unlock();
+    // First look in the memtable, then in the immutable memtable (if any).
+    LookupKey lkey(skey, snapshot);
+
+    std::unordered_set<std::string> resultSetofKeysFound;
+
+    // Use the specific attribute for memtable queries
+    mem->GetBySecondaryKey(attribute, skey, snapshot, value, &s, &resultSetofKeysFound, kNoOfOutputs);
+
+    if (imm != NULL && kNoOfOutputs - value->size() > 0) {
+      imm->GetBySecondaryKey(attribute, skey, snapshot, value, &s, &resultSetofKeysFound, kNoOfOutputs);
+    }
+
+    if (kNoOfOutputs > (int)(value->size())) {
+      s = current->Get(options, lkey, value, &stats,
+                       attribute, kNoOfOutputs,
+                       &resultSetofKeysFound, this);
+    }
+    mutex_.Lock();
+  }
+
+  if (have_stat_update && current->UpdateStats(stats)) {
+    MaybeScheduleCompaction();
+  }
+  mem->Unref();
+  if (imm != NULL)
+    imm->Unref();
+  current->Unref();
+  return s;
+}
+
+Status DBImpl::RangeGetBySecondaryKey(const ReadOptions &options, std::string attribute,
+                                      const Slice &startSkey, const Slice &endSkey,
+                                      std::vector<SecondayKeyReturnVal> *value,
+                                      int kNoOfOutputs) {
+  Status s;
+  MutexLock l(&mutex_);
+  SequenceNumber snapshot;
+  if (options.snapshot != NULL) {
+    snapshot =
+        reinterpret_cast<const SnapshotImpl *>(options.snapshot)->number_;
+  } else {
+    snapshot = versions_->LastSequence();
+  }
+
+  MemTable *mem = mem_;
+  MemTable *imm = imm_;
+  Version *current = versions_->current();
+  mem->Ref();
+  if (imm != NULL)
+    imm->Ref();
+  current->Ref();
+
+  bool have_stat_update = false;
+  Version::GetStats stats;
+
+  {
+    mutex_.Unlock();
+    // First look in the memtable, then in the immutable memtable (if any).
+
+    std::unordered_set<std::string> resultSetofKeysFound;
+
+    mem->RangeLookUpBySecondaryKey(attribute, startSkey, endSkey, snapshot, value, &s,
+                                   &resultSetofKeysFound, kNoOfOutputs);
+
+    if (imm != NULL && kNoOfOutputs - value->size() > 0) {
+      imm->RangeLookUpBySecondaryKey(attribute, startSkey, endSkey, snapshot, value, &s,
+                                     &resultSetofKeysFound, kNoOfOutputs);
+    }
+
+    if (kNoOfOutputs > (int)(value->size())) {
+      if (this->options_.interval_tree_file_name.empty())
+        s = current->EmbeddedRangeLookUp(
+            options, startSkey.ToString(), endSkey.ToString(), value, &stats,
+            attribute, kNoOfOutputs, &resultSetofKeysFound,
+            this, snapshot);
+      else
+        s = current->RangeLookUp(options, startSkey.ToString(),
+                                 endSkey.ToString(), value, &stats,
+                                 attribute, kNoOfOutputs, &resultSetofKeysFound,
+                                 this, snapshot);
     }
     mutex_.Lock();
   }
@@ -1528,7 +1650,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       imm_ = mem_;
       has_imm_.Release_Store(imm_);
       // SECONDARY MEMTABLE
-      mem_ = new MemTable(internal_comparator_, this->options_.secondary_key);
+      mem_ = new MemTable(internal_comparator_, this->options_.secondary_keys);
       mem_->Ref();
       force = false; // Do not force another compaction if have room
       MaybeScheduleCompaction();
@@ -1616,12 +1738,6 @@ void DBImpl::GetApproximateSizes(const Range *range, int n, uint64_t *sizes) {
 Status DB::Put(const WriteOptions &opt, const Slice &key, const Slice &value) {
   WriteBatch batch;
   batch.Put(key, value);
-  // ofstream outputFile;
-  // outputFile.open("/home/mohiuddin/Desktop/TestDB/debug2.txt"
-  // ,std::ofstream::out | std::ofstream::app);
-
-  // outputFile<<key.ToString()<<" -> "<<value.ToString()<<endl;
-
   return Write(opt, &batch);
 }
 

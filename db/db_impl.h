@@ -112,6 +112,19 @@ public:
                           const Slice &endSkey,
                           std::vector<SecondayKeyReturnVal> *value,
                           int kNoOfOutputs);
+  
+  // NEW: GetBySecondaryKey methods for specific secondary index attributes
+  virtual Status GetBySecondaryKey(const ReadOptions &options, std::string attribute,
+                                   const Slice &skey,
+                                   std::vector<SecondayKeyReturnVal> *value,
+                                   int kNoOfOutputs);
+
+  virtual Status RangeGetBySecondaryKey(const ReadOptions &options, std::string attribute,
+                                        const Slice &startSkey, const Slice &endSkey,
+                                        std::vector<SecondayKeyReturnVal> *value,
+                                        int kNoOfOutputs);
+  
+  // NEW: Multiple secondary index methods
   virtual Iterator *NewIterator(const ReadOptions &);
   virtual const Snapshot *GetSnapshot();
   virtual void ReleaseSnapshot(const Snapshot *snapshot);

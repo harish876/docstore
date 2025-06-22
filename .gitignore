@@ -13,3 +13,4 @@ build*
 test*
 .env
 release-build
+exp-build

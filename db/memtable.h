@@ -13,6 +13,7 @@
 #include "util/arena.h"
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 
 namespace leveldb {
 
@@ -26,6 +27,10 @@ public:
   // is zero and the caller must call Ref() at least once.
   explicit MemTable(const InternalKeyComparator &comparator,
                     std::string secAtt);
+
+  // NEW: Constructor for multiple secondary indexes
+  explicit MemTable(const InternalKeyComparator &comparator,
+                    const std::vector<std::string>& secAtts);
 
   // Increase reference count.
   void Ref() { ++refs_; }
@@ -82,6 +87,20 @@ public:
                    std::unordered_set<std::string> *resultSetofKeysFound,
                    int topKOutput);
 
+  // NEW: Multiple secondary index query methods
+  void GetBySecondaryKey(const std::string& attribute, const Slice &skey, 
+                         SequenceNumber snapshot,
+                         std::vector<SecondayKeyReturnVal> *value, Status *s,
+                         std::unordered_set<std::string> *resultSetofKeysFound,
+                         int topKOutput);
+
+  void RangeLookUpBySecondaryKey(const std::string& attribute, 
+                                 const Slice &startSkey, const Slice &endSkey,
+                                 SequenceNumber snapshot,
+                                 std::vector<SecondayKeyReturnVal> *value, Status *s,
+                                 std::unordered_set<std::string> *resultSetofKeysFound,
+                                 int topKOutput);
+
 private:
   ~MemTable(); // Private since only Unref() should be used to delete it
 
@@ -104,6 +123,10 @@ private:
   typedef btree::btree_map<string, vector<string> *> SecMemTable;
   SecMemTable secTable_;
   std::string secAttribute;
+
+  // NEW: Multiple secondary indexes support
+  std::unordered_map<std::string, SecMemTable> multiSecTables_;  // Map of attribute -> B-tree
+  std::vector<std::string> secondaryAttributes_;  // List of all secondary attributes
 
   // No copying allowed
   MemTable(const MemTable &);

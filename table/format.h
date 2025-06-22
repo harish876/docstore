@@ -7,6 +7,7 @@
 
 #include <string>
 #include <stdint.h>
+#include <unordered_map>
 #include "leveldb/slice.h"
 #include "leveldb/status.h"
 #include "leveldb/table_builder.h"
@@ -68,6 +69,17 @@ class Footer {
     	interval_handle_ = h;
     }
 
+  // NEW: Multiple interval blocks for multiple secondary indexes
+  const std::unordered_map<std::string, BlockHandle>& multi_interval_handles() const {
+    return multi_interval_handles_;
+  }
+  void set_multi_interval_handles(const std::unordered_map<std::string, BlockHandle>& handles) {
+    multi_interval_handles_ = handles;
+  }
+  void add_interval_handle(const std::string& key, const BlockHandle& handle) {
+    multi_interval_handles_[key] = handle;
+  }
+
   void EncodeTo(std::string* dst,  bool interval) const;
   Status DecodeFrom(Slice* input, bool interval);
 
@@ -82,6 +94,7 @@ class Footer {
   BlockHandle metaindex_handle_;
   BlockHandle index_handle_;
   BlockHandle interval_handle_;
+  std::unordered_map<std::string, BlockHandle> multi_interval_handles_;
 };
 
 // kTableMagicNumber was picked by running

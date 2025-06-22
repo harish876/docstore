@@ -120,7 +120,18 @@ public:
                           std::vector<SecondayKeyReturnVal> *value,
                           int kNoOfOutputs) = 0;
 
-  // This function checks if this key exists in level 0 to l-1 / memtable
+  // NEW: GetBySecondaryKey methods for specific secondary index attributes
+  virtual Status GetBySecondaryKey(const ReadOptions &options, std::string attribute,
+                                   const Slice &skey,
+                                   std::vector<SecondayKeyReturnVal> *value,
+                                   int kNoOfOutputs) = 0;
+
+  virtual Status RangeGetBySecondaryKey(const ReadOptions &options, std::string attribute,
+                                        const Slice &startSkey, const Slice &endSkey,
+                                        std::vector<SecondayKeyReturnVal> *value,
+                                        int kNoOfOutputs) = 0;
+
+    // This function checks if this key exists in level 0 to l-1 / memtable
   virtual bool checkifValid(const ReadOptions &options, const Slice &key,
                             int &level) = 0;
 

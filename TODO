@@ -1,2 +1,6 @@
 - Implement Range Query on secondary indexing
-- Maybe implement multiple secondary indexing in future.
+- ~~Maybe implement multiple secondary indexing in future.~~ ✅ IMPLEMENTED
+- Add support for compound indexes (multiple attributes in single index)
+- Implement index statistics and monitoring
+- Add index maintenance operations (rebuild, drop, create)
+- Support for partial indexes (index only documents matching certain criteria)

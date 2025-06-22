@@ -11,6 +11,7 @@
 #include <iostream>
 #include <stddef.h>
 #include <vector>
+#include <unordered_map>
 using namespace std;
 
 namespace leveldb {
@@ -152,9 +153,13 @@ struct Options {
   const FilterPolicy *filter_policy;
 
   // Create an Options object with default values for all fields.
-  string secondary_key;
+  string secondary_key;  // Legacy: kept for backward compatibility
   string primary_key;
   string interval_tree_file_name;
+  
+  // NEW: Multiple secondary indexes support
+  std::vector<std::string> secondary_keys;  // List of secondary key attributes
+  
   //////////////////Secondary Filter////////////
 
   Options();
@@ -175,6 +180,15 @@ struct Options {
     json_obj["primary_key"] = this->primary_key;
     json_obj["secondary_key"] = this->secondary_key;
     json_obj["interval_tree_file_name"] = this->interval_tree_file_name;
+    
+    // NEW: Serialize multiple secondary keys
+    nlohmann::json secondary_keys_array = nlohmann::json::array();
+    for (const auto& key : this->secondary_keys) {
+      secondary_keys_array.push_back(key);
+    }
+    json_obj["secondary_keys"] = secondary_keys_array;
+    
+
     if (this->filter_policy) {
       std::string filter_policy_name = std::string(this->filter_policy->Name());
       if (filter_policy_name.compare("leveldb.BuiltinBloomFilter") == 0) {
@@ -230,6 +244,13 @@ struct Options {
       options.primary_key = json_obj.value("primary_key", "");
       options.secondary_key = json_obj.value("secondary_key", "");
 
+      // NEW: Deserialize multiple secondary keys
+      if (json_obj.contains("secondary_keys") && json_obj["secondary_keys"].is_array()) {
+        for (const auto& key : json_obj["secondary_keys"]) {
+          options.secondary_keys.push_back(key.get<std::string>());
+        }
+      }
+      
       // Handle interval tree file name
       options.interval_tree_file_name =
           json_obj.value("interval_tree_file_name", "");

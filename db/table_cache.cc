@@ -119,16 +119,15 @@ Status TableCache::Get(const ReadOptions &options, uint64_t file_number,
                        bool (*saver)(void *, const Slice &, const Slice &,
                                      std::string &secKey, int &topKOutput,
                                      DBImpl *db),
-                       string &secKey, int &topKOutput, DBImpl *db) {
+                       std::string &attribute, int &topKOutput, DBImpl *db) {
   Cache::Handle *handle = NULL;
   Status s = FindTable(file_number, file_size, &handle);
   if (s.ok()) {
     Table *t = reinterpret_cast<TableAndFile *>(cache_->Value(handle))->table;
     if (this->options_->interval_tree_file_name.empty())
-      s = t->InternalGetWithInterval(options, k, arg, saver, secKey, topKOutput,
-                                     db);
+      s = t->InternalGetWithInterval(options, k, arg, saver, attribute, topKOutput, db);
     else
-      s = t->InternalGet(options, k, arg, saver, secKey, topKOutput, db);
+      s = t->InternalGet(options, k, arg, saver, attribute, topKOutput, db);
 
     cache_->Release(handle);
   } else {
@@ -164,14 +163,13 @@ Status TableCache::RangeLookUp(const ReadOptions &options, uint64_t file_number,
                                bool (*saver)(void *, const Slice &,
                                              const Slice &, std::string &secKey,
                                              int &topKOutput, DBImpl *db),
-                               string &secKey, int &topKOutput, DBImpl *db) {
+                               std::string &attribute, int &topKOutput, DBImpl *db) {
   Cache::Handle *handle = NULL;
   Status s = FindTable(file_number, file_size, &handle);
   if (s.ok()) {
     Table *t = reinterpret_cast<TableAndFile *>(cache_->Value(handle))->table;
-    // if(this->options_->IntervalTreeFileName.empty())
     s = t->RangeInternalGetWithInterval(options, startk, endk, arg, saver,
-                                        secKey, topKOutput, db);
+                                        attribute, topKOutput, db);
 
     cache_->Release(handle);
   } else {

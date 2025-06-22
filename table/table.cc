@@ -53,6 +53,16 @@ struct Table::Rep {
     delete[] filter_data;
     delete index_block;
     delete interval_block;
+    delete secondary_filter;
+    delete[] secondary_filter_data;
+    
+    // NEW: Clean up multi-secondary filters
+    for (auto& [key, filter] : multi_secondary_filters) {
+      delete filter;
+    }
+    for (auto& [key, data] : multi_secondary_filter_data) {
+      delete[] data;
+    }
   }
 
   Options options;
@@ -64,6 +74,10 @@ struct Table::Rep {
 
   FilterBlockReader *secondary_filter;
   const char *secondary_filter_data;
+
+  // NEW: Multi-secondary filters support
+  std::unordered_map<std::string, FilterBlockReader*> multi_secondary_filters;
+  std::unordered_map<std::string, const char*> multi_secondary_filter_data;
 
   BlockHandle metaindex_handle; // Handle to metaindex_block: saved from footer
   Block *index_block;
@@ -194,6 +208,15 @@ void Table::ReadMeta(const Footer &footer) {
     // outputFile<<(rep_->secondary_filter==NULL)<<endl;
   }
 
+  // NEW: Read multiple secondary filters for different attributes
+  for (const auto& sec_key : rep_->options.secondary_keys) {
+    std::string multi_skey = "secondaryfilter." + sec_key;
+    iter->Seek(multi_skey);
+    if (iter->Valid() && iter->key() == Slice(multi_skey)) {
+      ReadMultiSecondaryFilter(iter->value(), sec_key);
+    }
+  }
+
   delete iter;
   delete meta;
 }
@@ -240,6 +263,28 @@ void Table::ReadSecondaryFilter(const Slice &filter_handle_value) {
   }
   rep_->secondary_filter =
       new FilterBlockReader(rep_->options.filter_policy, block.data);
+}
+
+// NEW: Read multi-secondary filter for a specific attribute
+void Table::ReadMultiSecondaryFilter(const Slice &filter_handle_value, const std::string &attribute) {
+  Slice v = filter_handle_value;
+  BlockHandle filter_handle;
+  if (!filter_handle.DecodeFrom(&v).ok()) {
+    return;
+  }
+
+  // We might want to unify with ReadBlock() if we start
+  // requiring checksum verification in Table::Open.
+  ReadOptions opt;
+  opt.type = ReadType::Meta;
+  BlockContents block;
+  if (!ReadBlock(rep_->file, opt, filter_handle, &block).ok()) {
+    return;
+  }
+  if (block.heap_allocated) {
+    rep_->multi_secondary_filter_data[attribute] = block.data.data(); // Will need to delete later
+  }
+  rep_->multi_secondary_filters[attribute] = new FilterBlockReader(rep_->options.filter_policy, block.data);
 }
 
 Table::~Table() { delete rep_; }
@@ -597,6 +642,7 @@ Status Table::RangeInternalGetWithInterval(
       // leveldb::iostat.numberofIO++;
       block_iter->SeekToFirst();
       while (block_iter->Valid()) {
+
         bool f = (*saver)(arg, block_iter->key(), block_iter->value(), secKey,
                           topKOutput, db);
         block_iter->Next();
@@ -734,6 +780,179 @@ uint64_t Table::ApproximateOffsetOf(const Slice &key) const {
   }
   delete index_iter;
   return result;
+}
+
+// NEW: InternalGet method with attribute parameter for multi-secondary index support
+Status Table::InternalGet(const ReadOptions &options, const Slice &k, void *arg,
+                          bool (*saver)(void *, const Slice &, const Slice &,
+                                        std::string &secKey, int &topKOutput,
+                                        DBImpl *db),
+                          const std::string &attribute, int &topKOutput, DBImpl *db) {
+  Status s;
+  Iterator *iiter = rep_->index_block->NewIterator(rep_->options.comparator);
+  iiter->SeekToFirst();
+
+  // Get the filter for the specific attribute
+  FilterBlockReader *filter = nullptr;
+  auto filter_it = rep_->multi_secondary_filters.find(attribute);
+  if (filter_it != rep_->multi_secondary_filters.end()) {
+    filter = filter_it->second;
+  } else {
+    // Fall back to the default secondary filter if the attribute doesn't exist
+    filter = rep_->secondary_filter;
+  }
+
+  while (iiter->Valid()) {
+    Slice handle_value = iiter->value();
+    BlockHandle handle;
+    
+    if (filter != NULL && handle.DecodeFrom(&handle_value).ok() &&
+        !filter->KeyMayMatch(handle.offset(), k)) {
+      // Not found
+      sr_iostat.prunebloomfilter++;
+    } else {
+      Iterator *block_iter = BlockReader(this, options, iiter->value());
+      block_iter->SeekToFirst();
+      while (block_iter->Valid()) {
+        std::string temp_secKey = attribute;  // Create temporary non-const string
+        bool f = (*saver)(arg, block_iter->key(), block_iter->value(), temp_secKey,
+                          topKOutput, db);
+        if (f == false) {
+          sr_iostat.bloomfilterFP++;
+        }
+        block_iter->Next();
+      }
+      s = block_iter->status();
+      delete block_iter;
+    }
+
+    iiter->Next();
+  }
+
+  if (s.ok()) {
+    s = iiter->status();
+  }
+  delete iiter;
+  return s;
+}
+
+// NEW: InternalGetWithInterval method with attribute parameter for multi-secondary index support
+Status Table::InternalGetWithInterval(const ReadOptions &options, const Slice &k, void *arg,
+                                      bool (*saver)(void *, const Slice &, const Slice &,
+                                                    std::string &secKey, int &topKOutput,
+                                                    DBImpl *db),
+                                      const std::string &attribute, int &topKOutput, DBImpl *db) {
+  Status s;
+  Iterator *iiter = rep_->index_block->NewIterator(rep_->options.comparator);
+  iiter->SeekToFirst();
+
+  Iterator *iterInterval = rep_->interval_block->NewIterator(rep_->options.comparator);
+  iterInterval->SeekToFirst();
+
+  const char *ks = k.data();
+  Slice sk = Slice(ks, k.size() - 8);
+
+  // Get the filter for the specific attribute
+  FilterBlockReader *filter = nullptr;
+  auto filter_it = rep_->multi_secondary_filters.find(attribute);
+  if (filter_it != rep_->multi_secondary_filters.end()) {
+    filter = filter_it->second;
+  } else {
+    // Fall back to the default secondary filter if the attribute doesn't exist
+    filter = rep_->secondary_filter;
+  }
+
+  while (iiter->Valid()) {
+    Slice handle_value = iiter->value();
+    BlockHandle handle;
+    Slice key, value;
+    
+    if (iterInterval->Valid()) {
+      key = iterInterval->key();
+      value = iterInterval->value();
+    }
+    
+    if (sk.compare(key) < 0 || sk.compare(value) > 0) {
+      sr_iostat.pruneinterval++;
+    } else if (filter != NULL && handle.DecodeFrom(&handle_value).ok() &&
+               !filter->KeyMayMatch(handle.offset(), k)) {
+      sr_iostat.prunebloomfilter++;
+    } else {
+      Iterator *block_iter = BlockReader(this, options, iiter->value());
+      block_iter->SeekToFirst();
+      while (block_iter->Valid()) {
+        std::string temp_secKey = attribute;  // Create temporary non-const string
+        bool f = (*saver)(arg, block_iter->key(), block_iter->value(), temp_secKey,
+                          topKOutput, db);
+        if (f == false)
+          sr_iostat.bloomfilterFP++;
+        block_iter->Next();
+      }
+      s = block_iter->status();
+      delete block_iter;
+    }
+
+    iiter->Next();
+    iterInterval->Next();
+  }
+
+  if (s.ok()) {
+    s = iiter->status();
+  }
+  delete iiter;
+  delete iterInterval;
+  return s;
+}
+
+// NEW: RangeInternalGetWithInterval method with attribute parameter for multi-secondary index support
+Status Table::RangeInternalGetWithInterval(const ReadOptions &options, const Slice &startk, const Slice &endk,
+                                           void *arg,
+                                           bool (*saver)(void *, const Slice &, const Slice &,
+                                                         std::string &secKey, int &topKOutput,
+                                                         DBImpl *db),
+                                           const std::string &attribute, int &topKOutput, DBImpl *db) {
+  Status s;
+  Iterator *iiter = rep_->index_block->NewIterator(rep_->options.comparator);
+  iiter->SeekToFirst();
+
+  Iterator *iterInterval = rep_->interval_block->NewIterator(rep_->options.comparator);
+  iterInterval->SeekToFirst();
+
+  while (iiter->Valid()) {
+    Slice handle_value = iiter->value();
+    BlockHandle handle;
+    Slice key, value;
+    
+    if (iterInterval->Valid()) {
+      key = iterInterval->key();
+      value = iterInterval->value();
+    }
+    
+    if (startk.compare(value) > 0 || endk.compare(key) < 0) {
+      sr_range_iostat.pruneinterval++;
+    } else {
+      Iterator *block_iter = BlockReader(this, options, iiter->value());
+      block_iter->SeekToFirst();
+      while (block_iter->Valid()) {
+        std::string temp_secKey = attribute;  // Create temporary non-const string
+        bool f = (*saver)(arg, block_iter->key(), block_iter->value(), temp_secKey,
+                          topKOutput, db);
+        block_iter->Next();
+      }
+      s = block_iter->status();
+      delete block_iter;
+    }
+
+    iiter->Next();
+    iterInterval->Next();
+  }
+
+  if (s.ok()) {
+    s = iiter->status();
+  }
+  delete iiter;
+  delete iterInterval;
+  return s;
 }
 
 } // namespace leveldb

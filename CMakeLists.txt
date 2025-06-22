@@ -14,6 +14,7 @@ option(LEVELDB_PROFILE "Profiling mode: optimized with debugging symbols" OFF)
 option(LEVELDB_BUILD_TESTS "Build LevelDB's unit tests" OFF)
 option(LEVELDB_BUILD_BENCHMARKS "Build LevelDB's benchmarks" OFF)
 option(LEVELDB_HTTP_SERVER "Build HTTP server for LevelDB" OFF)
+option(LEVELDB_BUILD_EXAMPLES "Build example programs" ON)
 include(GNUInstallDirs)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -263,6 +264,17 @@ target_link_libraries(document_bench_test
     GTest::Main
 )
 
+# Add multi-index examples
+if(LEVELDB_BUILD_EXAMPLES)
+    add_executable(multi_index_example doc/multi_index_example.cpp)
+    target_link_libraries(multi_index_example
+        PRIVATE 
+        docstore 
+        Threads::Threads
+        nlohmann_json::nlohmann_json
+    )
+endif()
+
 # Find and add Google Benchmark
 find_package(benchmark REQUIRED)
 if(NOT benchmark_FOUND)
@@ -411,6 +423,15 @@ if(BUILD_SHARED_LIBS)
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   )
+endif()
+
+# Install examples if built
+if(LEVELDB_BUILD_EXAMPLES)  
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/doc/writeSec.cpp")
+    install(TARGETS write_sec_example
+      RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+  endif()
 endif()
 
 install(DIRECTORY include/leveldb

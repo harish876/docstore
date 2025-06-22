@@ -76,21 +76,43 @@ public:
 
   Status Get(const ReadOptions &, const LookupKey &key, std::string *val,
              GetStats *stats);
+
+  // ORIGINAL : Single Secondary Index Methods
   Status Get(const ReadOptions &options, const LookupKey &k,
              std::vector<SecondayKeyReturnVal> *value, GetStats *stats,
-             string secKey, int kNoOfOutputs,
+             std::string secKey, int kNoOfOutputs,
              std::unordered_set<std::string> *resultSetofKeysFound, DBImpl *db);
   Status RangeLookUp(const ReadOptions &options, const std::string startk,
                      const std::string endk,
                      std::vector<SecondayKeyReturnVal> *value, GetStats *stats,
-                     string secKey, int kNoOfOutputs,
+                     std::string secKey, int kNoOfOutputs,
                      std::unordered_set<std::string> *resultSetofKeysFound,
                      DBImpl *db, SequenceNumber snapshot);
   Status EmbeddedRangeLookUp(
       const ReadOptions &options, std::string startk, std::string endk,
-      std::vector<SecondayKeyReturnVal> *value, GetStats *stats, string secKey,
+      std::vector<SecondayKeyReturnVal> *value, GetStats *stats, std::string secKey,
       int kNoOfOutputs, std::unordered_set<std::string> *resultSetofKeysFound,
       DBImpl *db, SequenceNumber snapshot);
+
+  // NEW: Get methods with attribute parameter for multi-secondary index support
+  // Status Get(const ReadOptions &options, const LookupKey &k,
+  //            std::vector<SecondayKeyReturnVal> *value, GetStats *stats,
+  //            const std::string &attribute, std::string secKey,
+  //            int kNoOfOutputs,
+  //            std::unordered_set<std::string> *resultSetofKeysFound, DBImpl *db);
+  // Status RangeLookUp(const ReadOptions &options, const std::string startk,
+  //                    const std::string endk,
+  //                    std::vector<SecondayKeyReturnVal> *value, GetStats *stats,
+  //                    const std::string &attribute, std::string secKey,
+  //                    int kNoOfOutputs,
+  //                    std::unordered_set<std::string> *resultSetofKeysFound,
+  //                    DBImpl *db, SequenceNumber snapshot);
+  // Status EmbeddedRangeLookUp(
+  //     const ReadOptions &options, std::string startk, std::string endk,
+  //     std::vector<SecondayKeyReturnVal> *value, GetStats *stats,
+  //     const std::string &attribute, std::string secKey, int kNoOfOutputs,
+  //     std::unordered_set<std::string> *resultSetofKeysFound, DBImpl *db,
+  //     SequenceNumber snapshot);
 
   bool checkifValid(const ReadOptions &options, const LookupKey &key,
                     int &level, GetStats *stats);

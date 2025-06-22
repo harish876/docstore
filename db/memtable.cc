@@ -27,6 +27,13 @@ MemTable::MemTable(const InternalKeyComparator &cmp, std::string secAtt)
   secAttribute = secAtt;
 }
 
+MemTable::MemTable(const InternalKeyComparator &cmp, const std::vector<std::string>& secAtts)
+    : comparator_(cmp), refs_(0), table_(comparator_, &arena_), secondaryAttributes_(secAtts) {
+  for (const auto& attr : secAtts) {
+    multiSecTables_[attr] = SecMemTable();
+  }
+}
+
 MemTable::~MemTable() {
 
   SecMemTable::const_iterator lookup = secTable_.begin();
@@ -122,8 +129,41 @@ void MemTable::Add(SequenceNumber s, ValueType type, const Slice &key,
     return;
   }
 
-  const std::string &sKeyAtt = secAttribute;
+  // NEW: Multi-secondary index support
+  // Process all configured secondary keys
+  for (const auto& secKeyName : secondaryAttributes_) {
+    if (!doc.contains(secKeyName) || doc[secKeyName].is_null())
+      continue;
 
+    std::ostringstream skey;
+    if (doc[secKeyName].is_number_unsigned()) {
+      skey << doc[secKeyName].get<uint64_t>();
+    } else if (doc[secKeyName].is_number_integer()) {
+      skey << doc[secKeyName].get<int64_t>();
+    } else if (doc[secKeyName].is_number_float()) {
+      skey << doc[secKeyName].get<double>();
+    } else if (doc[secKeyName].is_string()) {
+      skey << doc[secKeyName].get<std::string>();
+    } else if (doc[secKeyName].is_boolean()) {
+      skey << (doc[secKeyName].get<bool>() ? "true" : "false");
+    }
+
+    std::string secKey = skey.str();
+    
+    // Use multiSecTables_ for multi-secondary index support
+    auto& secTable = multiSecTables_[secKeyName];
+    SecMemTable::const_iterator lookup = secTable.find(secKey);
+    if (lookup == secTable.end()) {
+      auto *invertedList = new std::vector<std::string>();
+      invertedList->push_back(key.ToString());
+      secTable.insert(std::make_pair(secKey, invertedList));
+    } else {
+      lookup->second->push_back(key.ToString());
+    }
+  }
+
+  // LEGACY: Keep the old single secondary index logic for backward compatibility
+  const std::string &sKeyAtt = secAttribute;
   if (!doc.contains(sKeyAtt) || doc[sKeyAtt].is_null())
     return;
 
@@ -373,6 +413,171 @@ void MemTable::RangeLookUp(
                 resultSetofKeysFound->insert(newVal.key);
                 resultSetofKeysFound->erase(
                     resultSetofKeysFound->find(value->front().key));
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// NEW: GetBySecondaryKey implementation for specific secondary index attributes
+void MemTable::GetBySecondaryKey(const std::string& attribute, const Slice &skey, 
+                                 SequenceNumber snapshot,
+                                 std::vector<SecondayKeyReturnVal> *value, Status *s,
+                                 std::unordered_set<std::string> *resultSetofKeysFound,
+                                 int topKOutput) {
+  
+  // Check if this attribute exists in our multi-secondary index
+  auto sec_table_it = multiSecTables_.find(attribute);
+  if (sec_table_it == multiSecTables_.end()) {
+    //Just return if the attribute does not exist in the multi-secondary index
+    return;
+  }
+
+  auto& secTable = sec_table_it->second;
+  auto lookup = secTable.find(skey.ToString());
+  if (lookup != secTable.end()) {
+
+    pair<string, vector<string> *> pr = *lookup;
+    for (int i = pr.second->size() - 1; i >= 0; i--) {
+      if (value->size() >= topKOutput)
+        return;
+
+      Slice pkey = pr.second->at(i);
+      LookupKey lkey(pkey, snapshot);
+      std::string svalue;
+      Status s;
+      uint64_t tag;
+      if (this->Get(lkey, &svalue, &s, &tag)) {
+        if (!s.IsNotFound()) {
+          nlohmann::json doc;
+
+          try {
+            doc = nlohmann::json::parse(svalue);
+          } catch (const nlohmann::json::parse_error &e) {
+            continue;
+          }
+
+          if (!doc.contains(attribute) || doc[attribute].is_null())
+            continue;
+
+          std::ostringstream tempskey;
+          if (doc[attribute].is_number_unsigned()) {
+            tempskey << doc[attribute].get<uint64_t>();
+          } else if (doc[attribute].is_number_integer()) {
+            tempskey << doc[attribute].get<int64_t>();
+          } else if (doc[attribute].is_number_float()) {
+            tempskey << doc[attribute].get<double>();
+          } else if (doc[attribute].is_string()) {
+            tempskey << doc[attribute].get<std::string>();
+          } else if (doc[attribute].is_boolean()) {
+            tempskey << (doc[attribute].get<bool>() ? "true" : "false");
+          }
+
+          Slice valsKey = tempskey.str();
+          if (comparator_.comparator.user_comparator()->Compare(valsKey, skey) == 0) {
+            struct SecondayKeyReturnVal newVal;
+            newVal.key = pr.second->at(i);
+
+            if (resultSetofKeysFound->find(newVal.key) == resultSetofKeysFound->end()) {
+              newVal.value = svalue;
+              newVal.sequence_number = tag;
+
+              if (value->size() < topKOutput) {
+                newVal.Push(value, newVal);
+                resultSetofKeysFound->insert(newVal.key);
+              } else if (newVal.sequence_number > value->front().sequence_number) {
+                newVal.Pop(value);
+                newVal.Push(value, newVal);
+                resultSetofKeysFound->insert(newVal.key);
+                resultSetofKeysFound->erase(resultSetofKeysFound->find(value->front().key));
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// NEW: RangeLookUpBySecondaryKey implementation for specific secondary index attributes
+void MemTable::RangeLookUpBySecondaryKey(const std::string& attribute, 
+                                         const Slice &startSkey, const Slice &endSkey,
+                                         SequenceNumber snapshot,
+                                         std::vector<SecondayKeyReturnVal> *value, Status *s,
+                                         std::unordered_set<std::string> *resultSetofKeysFound,
+                                         int topKOutput) {
+  
+  // Check if this attribute exists in our multi-secondary index
+  auto sec_table_it = multiSecTables_.find(attribute);
+  if (sec_table_it == multiSecTables_.end()) {
+    // Fall back to the default secondary attribute if the requested one doesn't exist
+    if (attribute == secAttribute) {
+      RangeLookUp(startSkey, endSkey, snapshot, value, s, resultSetofKeysFound, topKOutput);
+    }
+    return;
+  }
+
+  auto& secTable = sec_table_it->second;
+  auto lookuplb = secTable.lower_bound(startSkey.ToString());
+  auto lookupub = secTable.upper_bound(endSkey.ToString());
+  
+  for (; lookuplb != lookupub; lookuplb++) {
+    pair<string, vector<string> *> pr = *lookuplb;
+    for (int i = pr.second->size() - 1; i >= 0; i--) {
+      if (value->size() >= topKOutput)
+        continue;
+
+      Slice pkey = pr.second->at(i);
+      LookupKey lkey(pkey, snapshot);
+      std::string svalue;
+      Status s;
+      uint64_t tag;
+      if (this->Get(lkey, &svalue, &s, &tag)) {
+        if (!s.IsNotFound()) {
+          nlohmann::json doc;
+
+          try {
+            doc = nlohmann::json::parse(svalue);
+          } catch (const nlohmann::json::parse_error &e) {
+            continue;
+          }
+
+          if (!doc.contains(attribute) || doc[attribute].is_null())
+            continue;
+
+          std::ostringstream tempskey;
+          if (doc[attribute].is_number_unsigned()) {
+            tempskey << doc[attribute].get<uint64_t>();
+          } else if (doc[attribute].is_number_integer()) {
+            tempskey << doc[attribute].get<int64_t>();
+          } else if (doc[attribute].is_number_float()) {
+            tempskey << doc[attribute].get<double>();
+          } else if (doc[attribute].is_string()) {
+            tempskey << doc[attribute].get<std::string>();
+          } else if (doc[attribute].is_boolean()) {
+            tempskey << (doc[attribute].get<bool>() ? "true" : "false");
+          }
+
+          Slice valsKey = tempskey.str();
+          if (comparator_.comparator.user_comparator()->Compare(valsKey, pr.first) == 0) {
+            struct SecondayKeyReturnVal newVal;
+            newVal.key = pr.second->at(i);
+
+            if (resultSetofKeysFound->find(newVal.key) == resultSetofKeysFound->end()) {
+              newVal.value = svalue;
+              newVal.sequence_number = tag;
+
+              if (value->size() < topKOutput) {
+                newVal.Push(value, newVal);
+                resultSetofKeysFound->insert(newVal.key);
+              } else if (newVal.sequence_number > value->front().sequence_number) {
+                newVal.Pop(value);
+                newVal.Push(value, newVal);
+                resultSetofKeysFound->insert(newVal.key);
+                resultSetofKeysFound->erase(resultSetofKeysFound->find(value->front().key));
               }
             }
           }

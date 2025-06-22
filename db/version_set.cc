@@ -710,7 +710,7 @@ Status Version::Get(const ReadOptions &options, const LookupKey &k,
 
 Status Version::Get(const ReadOptions &options, const LookupKey &k,
                     std::vector<SecondayKeyReturnVal> *value, GetStats *stats,
-                    string secKey, int kNoOfOutputs,
+                    std::string secKey, int kNoOfOutputs,
                     std::unordered_set<std::string> *resultSetofKeysFound,
                     DBImpl *db) {
 
@@ -804,7 +804,7 @@ Status Version::Get(const ReadOptions &options, const LookupKey &k,
 
 Status Version::EmbeddedRangeLookUp(
     const ReadOptions &options, std::string startk, std::string endk,
-    std::vector<SecondayKeyReturnVal> *value, GetStats *stats, string secKey,
+    std::vector<SecondayKeyReturnVal> *value, GetStats *stats, std::string secKey,
     int kNoOfOutputs, std::unordered_set<std::string> *resultSetofKeysFound,
     DBImpl *db, SequenceNumber snapshot) {
 
@@ -902,7 +902,7 @@ Status Version::EmbeddedRangeLookUp(
       saver.level = level;
       saver.resultSetofKeysFound = resultSetofKeysFound;
       s = vset_->table_cache_->RangeLookUp(
-          options, f->number, f->file_size, startk, endk, &saver,
+          options, f->number, f->file_size, Slice(startk), Slice(endk), &saver,
           &RangeSecSaveValue, secKey, kNoOfOutputs, db);
     }
 
@@ -926,7 +926,7 @@ Status Version::EmbeddedRangeLookUp(
 Status
 Version::RangeLookUp(const ReadOptions &options, std::string startk,
                      std::string endk, std::vector<SecondayKeyReturnVal> *value,
-                     GetStats *stats, string secKey, int kNoOfOutputs,
+                     GetStats *stats, std::string secKey, int kNoOfOutputs,
                      std::unordered_set<std::string> *resultSetofKeysFound,
                      DBImpl *db, SequenceNumber snapshot) {
 
@@ -999,12 +999,10 @@ Version::RangeLookUp(const ReadOptions &options, std::string startk,
       saver.value = value;
       saver.level = 1000;
       saver.resultSetofKeysFound = resultSetofKeysFound;
-      // cout<<"start==end\n";
       s = vset_->table_cache_->Get(
           options, f->number, f->file_size, blockkey.internal_key(),
           lkey.internal_key(), &saver, &SecSaveValue, secKey, kNoOfOutputs, db);
     } else {
-
       RangeSecSaver saver;
       saver.state = kNotFound;
       saver.ucmp = ucmp;
@@ -1014,7 +1012,7 @@ Version::RangeLookUp(const ReadOptions &options, std::string startk,
       saver.level = 1000;
       saver.resultSetofKeysFound = resultSetofKeysFound;
       s = vset_->table_cache_->RangeLookUp(
-          options, f->number, f->file_size, blockkey.internal_key(), &saver,
+          options, f->number, f->file_size, Slice(startk), Slice(endk), &saver,
           &RangeSecSaveValue, secKey, kNoOfOutputs, db);
       if (s.IsIOError())
         topkin++;
