@@ -1348,10 +1348,7 @@ Status DBImpl::Put(const WriteOptions &o, const Slice &val) {
   } else {
     return Status::InvalidArgument("Unsupported primary key type");
   }
-
-  doc.erase(pKeyAtt);
-  std::string serializedDoc = doc.dump();
-  return DB::Put(o, pKey.str(), serializedDoc);
+  return DB::Put(o, pKey.str(), doc.dump());
 }
 
 Status DBImpl::Delete(const WriteOptions &options, const Slice &key) {

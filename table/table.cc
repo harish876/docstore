@@ -51,6 +51,8 @@ struct Table::Rep {
   ~Rep() {
     delete filter;
     delete[] filter_data;
+    delete secondary_filter;
+    delete[] secondary_filter_data;
     delete index_block;
     delete interval_block;
   }

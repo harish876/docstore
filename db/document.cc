@@ -39,29 +39,33 @@ DocumentStore::DocumentStore(const std::string &base_path, leveldb::Status &s)
 }
 
 DocumentStore::~DocumentStore() {
-  collections_handle_.clear();
+  // Clear all database connections and clean up filter policies
+  {
+    std::lock_guard<std::mutex> lock(collections_mutex_);
+    // Clean up filter policies
+    for (auto& [collection_name, filter_policy] : filter_policies_) {
+      if (filter_policy) {
+        delete filter_policy;
+      }
+    }
+    filter_policies_.clear();
+    collections_.clear();
+  }
+  
+  // Reset the registry
   collection_registry_.reset();
 }
 
-/**
-  collection_name is mandatory
-  options is mandatory and resolves to default leveldb options
-  schema is non mandatory and if left emtpy turns collection into a vanilla KV
-  store
- */
 leveldb::Status
 DocumentStore::CreateCollection(const std::string &collection_name,
                                 leveldb::Options options,
                                 nlohmann::json &schema) {
-  // check if collection exists in metadata table. if exists dont do anything
   leveldb::Status status;
   nlohmann::json collection_metadata;
   status = CheckCollectionInRegistry(collection_name, collection_metadata);
   if (!status.IsNotFound()) {
     return OpenCollection(collection_name, collection_metadata);
   }
-
-  // create the database
   options.create_if_missing = true;
   leveldb::DB *db = nullptr;
   status = leveldb::DB::Open(options, base_path_ + "/" + collection_name, &db);
@@ -88,9 +92,11 @@ DocumentStore::CreateCollection(const std::string &collection_name,
     return status;
   }
 
-  collections_handle_.emplace(
-      collection_name,
-      CollectionHandle{std::unique_ptr<leveldb::DB>(db), collection_metadata});
+  {
+    std::lock_guard<std::mutex> lock(collections_mutex_);
+    collections_[collection_name] = std::unique_ptr<leveldb::DB>(db);
+  }
+  
   return status;
 }
 
@@ -115,7 +121,6 @@ DocumentStore::DropCollection(const std::string &collection_name) {
 leveldb::Status
 DocumentStore::OpenCollection(const std::string &collection_name,
                               const nlohmann::json &metadata) {
-  // create the database
   leveldb::Options collection_options;
   leveldb::Status status;
   collection_options = collection_options.FromJSON(metadata["options"], status);
@@ -137,9 +142,10 @@ DocumentStore::OpenCollection(const std::string &collection_name,
     return status;
   }
 
-  collections_handle_.emplace(
-      collection_name,
-      CollectionHandle{std::unique_ptr<leveldb::DB>(db), metadata});
+  {
+    std::lock_guard<std::mutex> lock(collections_mutex_);
+    collections_[collection_name] = std::unique_ptr<leveldb::DB>(db);
+  }
   
   return status;
 }
@@ -188,15 +194,16 @@ leveldb::Status DocumentStore::Get(const std::string &collection_name,
                                    std::string key, std::string &value) {
 
   leveldb::Status s;
-  CollectionHandle *collection_handle = GetCollectionHandle(collection_name, s);
-  if (!collection_handle) {
+  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  if (!db) {
     return s;
   }
-  s = (collection_handle->db_)->Get(leveldb::ReadOptions(), key, &value);
+  s = db->Get(leveldb::ReadOptions(), key, &value);
   if (!s.ok()) {
     std::cerr << "Failed to get from collection " << collection_name << ": "
               << s.ToString() << std::endl;
   }
+
   return s;
 }
 
@@ -204,18 +211,16 @@ leveldb::Status DocumentStore::GetSec(
     const std::string &collection_name, const std::string &secondary_key,
     std::vector<leveldb::SecondayKeyReturnVal> *value, int top_k) {
   leveldb::Status s;
-  CollectionHandle *collection_db = GetCollectionHandle(collection_name, s);
-  if (!collection_db) {
-    std::cout << "Collection handle not found in registry. This should not happen" << std::endl;
-    return s.NotFound(
-        "Collection handle not found in registry. This should not happen");
+  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
   }
-  s = (collection_db->db_)
-          ->Get(leveldb::ReadOptions(), secondary_key, value, top_k);
+  s = db->Get(leveldb::ReadOptions(), secondary_key, value, top_k);
   if (!s.ok()) {
     std::cerr << "Failed to get secondary key from collection " << collection_name << ": "
               << s.ToString() << std::endl;
   }
+
   return s;
 }
 
@@ -224,93 +229,64 @@ leveldb::Status DocumentStore::RangeGetSec(
     const std::string &secondary_end_key,
     std::vector<leveldb::SecondayKeyReturnVal> *value, int top_k) {
   leveldb::Status s;
-  CollectionHandle *collection_db = GetCollectionHandle(collection_name, s);
-  if (!collection_db || (collection_db && !collection_db->db_)) {
-    return s.NotFound(
-        "Collection handle not found in registry. This should not happen");
+  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
   }
-  s = (collection_db->db_)
-          ->RangeGet(leveldb::ReadOptions(), secondary_start_key,
-                     secondary_end_key, value, top_k);
+  s = db->RangeGet(leveldb::ReadOptions(), secondary_start_key,
+                   secondary_end_key, value, top_k);
   if (!s.ok()) {
     std::cerr << "Failed to range get secondary key from collection " << collection_name << ": "
               << s.ToString() << std::endl;
   }
+
   return s;
 }
 
-// TODO: Columnar decomposition
 leveldb::Status DocumentStore::Insert(const std::string &collection_name,
                                       nlohmann::json &document) {
 
   leveldb::Status s;
-  CollectionHandle *collection_handle = GetCollectionHandle(collection_name, s);
-  if (!collection_handle || (collection_handle && !collection_handle->db_)) {
-    return s.NotFound(
-        "Collection handle not found in registry. This should not happen");
+  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
   }
-  if (collection_handle->ApplySchemaCheck()) {
-    s = ValidateSchema(document, collection_handle->metadata_["schema"]);
+  nlohmann::json metadata;
+  s = CheckCollectionInRegistry(collection_name, metadata);
+  if (!s.ok()) {
+    return s;
+  }
+  if (metadata.contains("schema")) {
+    s = ValidateSchema(document, metadata["schema"]);
     if (!s.ok()) {
       return s;
     }
   }
-
-  s = (collection_handle->db_)->Put(leveldb::WriteOptions(), document.dump());
+  s = db->Put(leveldb::WriteOptions(), document.dump());
   if (!s.ok()) {
     std::cerr << "Failed to insert into collection " << collection_name << ": "
               << s.ToString() << std::endl;
     return s;
   }
+
   return s;
 }
 
-// TODO: Columnar decomposition
 leveldb::Status DocumentStore::Insert(const std::string &collection_name,
                                       std::string key, std::string value) {
 
   leveldb::Status s;
-  CollectionHandle *collection_handle = GetCollectionHandle(collection_name, s);
-  if (!collection_handle || (collection_handle && !collection_handle->db_)) {
-    return s.NotFound(
-        "Collection handle not found in registry. This should not happen");
+  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
   }
-  s = (collection_handle->db_)->Put(leveldb::WriteOptions(), key, value);
+  s = db->Put(leveldb::WriteOptions(), key, value);
   if (!s.ok()) {
     std::cerr << "Failed to insert into collection " << collection_name << ": "
               << s.ToString() << std::endl;
   }
+
   return s;
-}
-
-CollectionHandle *
-DocumentStore::GetCollectionHandle(const std::string &collection_name,
-                                   leveldb::Status &s) {
-  auto it = collections_handle_.find(collection_name);
-  if (it != collections_handle_.end()) {
-    return &it->second;
-  }
-
-  nlohmann::json metadata;
-  s = CheckCollectionInRegistry(collection_name, metadata);
-  if (!s.ok()) {
-    std::cerr << "Failed to get collection metadata " << collection_name << ": "
-              << s.ToString() << std::endl;
-    return nullptr;
-  }
-
-  s = OpenCollection(collection_name, metadata);
-  if (!s.ok()) {
-    std::cerr << "Failed to open collection " << collection_name << ": "
-              << s.ToString() << std::endl;
-    return nullptr;
-  }
-
-  it = collections_handle_.find(collection_name);
-  if (it != collections_handle_.end()) {
-    return &it->second;
-  }
-  return nullptr;
 }
 
 leveldb::Status DocumentStore::ExtendMetadata(const nlohmann::json &document,
@@ -328,14 +304,7 @@ leveldb::Status DocumentStore::ExtendMetadata(const nlohmann::json &document,
     - boolean
     - array [Non Recursive Check]
     - null
- */
-leveldb::Status DocumentStore::ValidateSchema(const nlohmann::json &document,
-                                              const nlohmann::json &schema) {
-  leveldb::Status s;
-  if (!isValidJSON(schema)) {
-    return s.Corruption("Invalid Schema Object. Invalid JSON");
-  }
-  /**
+
     Example Schema Object. Extend support only for data types
     json schema = {
       {"fields",
@@ -347,7 +316,13 @@ leveldb::Status DocumentStore::ValidateSchema(const nlohmann::json &document,
        ],
       {"required", ["id", "name", "age", "is_active"]},
   };
-  */
+ */
+leveldb::Status DocumentStore::ValidateSchema(const nlohmann::json &document,
+                                              const nlohmann::json &schema) {
+  leveldb::Status s;
+  if (!isValidJSON(schema)) {
+    return s.Corruption("Invalid Schema Object. Invalid JSON");
+  }
   if (!schema.contains("required") ||
       (schema.contains("required") && !schema["required"].is_array())) {
     return s.Corruption("Invalid Schema Object. 'required' field missing");
@@ -422,13 +397,13 @@ bool DocumentStore::isValidJSON(const nlohmann::json &document) {
 leveldb::Status DocumentStore::GetAll(const std::string &collection_name,
                                       std::vector<nlohmann::json> &documents) {
   leveldb::Status s;
-  CollectionHandle *collection_handle = GetCollectionHandle(collection_name, s);
-  if (!collection_handle || (collection_handle && !collection_handle->db_)) {
-    return s.NotFound("Collection handle not found in registry");
+  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
   }
 
   std::unique_ptr<leveldb::Iterator> it(
-      collection_handle->db_->NewIterator(leveldb::ReadOptions()));
+      db->NewIterator(leveldb::ReadOptions()));
 
   for (it->SeekToFirst(); it->Valid(); it->Next()) {
     nlohmann::json doc;
@@ -454,13 +429,13 @@ leveldb::Status DocumentStore::GetRange(const std::string &collection_name,
                                         const std::string &end_key,
                                         std::vector<nlohmann::json> &documents) {
   leveldb::Status s;
-  CollectionHandle *collection_handle = GetCollectionHandle(collection_name, s);
-  if (!collection_handle || (collection_handle && !collection_handle->db_)) {
-    return s.NotFound("Collection handle not found in registry");
+  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
   }
 
   std::unique_ptr<leveldb::Iterator> it(
-      collection_handle->db_->NewIterator(leveldb::ReadOptions()));
+      db->NewIterator(leveldb::ReadOptions()));
 
   for (it->Seek(start_key); it->Valid() && it->key().ToString() <= end_key; it->Next()) {
     nlohmann::json doc;
@@ -479,6 +454,57 @@ leveldb::Status DocumentStore::GetRange(const std::string &collection_name,
   }
 
   return s;
+}
+
+leveldb::DB* DocumentStore::GetOrCreateDB(const std::string& collection_name, leveldb::Status& s) {
+  // Try to get existing connection
+  {
+    std::lock_guard<std::mutex> lock(collections_mutex_);
+    auto it = collections_.find(collection_name);
+    if (it != collections_.end()) {
+      return it->second.get();
+    }
+  }
+  
+  // Not found, need to open it
+  nlohmann::json metadata;
+  s = CheckCollectionInRegistry(collection_name, metadata);
+  if (!s.ok()) {
+    return nullptr;
+  }
+  
+  // Parse options
+  leveldb::Options options;
+  options = options.FromJSON(metadata["options"], s);
+  if (!s.ok()) {
+    return nullptr;
+  }
+  
+  // Store the filter policy for later cleanup
+  const leveldb::FilterPolicy* filter_policy = options.filter_policy;
+  
+  // Open database
+  leveldb::DB* db = nullptr;
+  s = leveldb::DB::Open(options, base_path_ + "/" + collection_name, &db);
+  if (!s.ok()) {
+    std::cerr << "Failed to open collection " << collection_name << ": "
+              << s.ToString() << std::endl;
+    // Clean up filter policy if database open failed
+    if (filter_policy) {
+      delete filter_policy;
+    }
+    return nullptr;
+  }
+  
+  // Store in map with filter policy for cleanup
+  {
+    std::lock_guard<std::mutex> lock(collections_mutex_);
+    collections_[collection_name] = std::unique_ptr<leveldb::DB>(db);
+    // Store filter policy for cleanup when database is closed
+    filter_policies_[collection_name] = filter_policy;
+  }
+  
+  return db;
 }
 
 } // namespace docstore

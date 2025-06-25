@@ -61,9 +61,8 @@ public:
                                  nlohmann::json &result);
 
   // Utility Methods
-  CollectionHandle *GetCollectionHandle(const std::string &collection_name,
-                                        leveldb::Status &s);
   bool isValidJSON(const nlohmann::json &document);
+  leveldb::DB* GetOrCreateDB(const std::string& collection_name, leveldb::Status& s);
 
   // Metadata Helper functions
   leveldb::Status CheckCollectionInRegistry(const string &collection_name,
@@ -81,18 +80,12 @@ public:
   leveldb::Status GetRange(const std::string &collection_name, const std::string& min_key, const std::string& max_key,
                         std::vector<nlohmann::json> &documents);
 
-  // Debug method to print all collections in the handle map
-  void PrintCollections() const {
-    std::cout << "Collections in handle map:" << std::endl;
-    for (const auto &pair : collections_handle_) {
-      std::cout << "Collection: " << pair.first << std::endl;
-    }
-  }
-
 private:
   std::string base_path_;
   std::unique_ptr<leveldb::DB> collection_registry_;
-  std::map<std::string, CollectionHandle> collections_handle_;
+  std::unordered_map<std::string, std::unique_ptr<leveldb::DB>> collections_;
+  std::unordered_map<std::string, const leveldb::FilterPolicy*> filter_policies_;
+  std::mutex collections_mutex_;
   leveldb::Options options_;
 
   bool validate_type(nlohmann::basic_json<> &document_value, std::string &type);
