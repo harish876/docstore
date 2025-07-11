@@ -4,15 +4,33 @@
 #include "leveldb/options.h"
 #include "leveldb/status.h"
 #include "nlohmann/json_fwd.hpp"
+#include "util/encoding.h"
 #include "util/testharness.h"
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <string>
 #include <thread>
+#include <vector>
+
+// Add operator<< for std::vector<int> to help with test debugging
+namespace std {
+template <typename T> ostream &operator<<(ostream &os, const vector<T> &vec) {
+  os << "[";
+  for (size_t i = 0; i < vec.size(); ++i) {
+    if (i > 0)
+      os << ", ";
+    os << vec[i];
+  }
+  os << "]";
+  return os;
+}
+} // namespace std
 
 using namespace nlohmann;
 
@@ -468,7 +486,6 @@ TEST(DocumentStoreTest, PutAndGetQueryDocumentWithSecIndex) {
 
   std::vector<leveldb::SecondayKeyReturnVal> secondary_values;
   s = store.GetSec("users", "30", &secondary_values, 1000);
-  // SELECT * from users where user_age = 30
   ASSERT_TRUE(s.ok());
   ASSERT_TRUE(secondary_values.size() == 1);
 
@@ -1052,6 +1069,330 @@ TEST(DocumentStoreTest, ComprehensiveConcurrencyTest) {
   }
 
   this->TearDown();
+}
+
+TEST(DocumentStoreTest, OrderingTest) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+
+  leveldb::Options options;
+  options.primary_key = "user_id";
+  options.secondary_key = "user_age";
+  options.filter_policy = leveldb::NewBloomFilterPolicy(20);
+
+  class CleanupGuard {
+  public:
+    CleanupGuard(leveldb::Options &opts) : options_(opts) {}
+    ~CleanupGuard() {
+      std::cout << "Cleaning up filter policy" << std::endl;
+      if (options_.filter_policy) {
+        delete options_.filter_policy;
+        options_.filter_policy = nullptr;
+      }
+    }
+
+  private:
+    leveldb::Options &options_;
+  };
+
+  CleanupGuard cleanup(options);
+
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_age": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": ["user_id", "user_age"]
+    }
+  )"_json;
+
+  s = store.CreateCollection("users_ordering", options, schema);
+  ASSERT_TRUE(s.ok());
+  std::vector<std::pair<int32_t, int32_t>> test_data = {
+      {1, 25}, {2, 15}, {4, 5}, {3, 35}, {5, 45}, {6, 10}, {7, 50}, {8, 1},
+  };
+
+  for (const auto &[user_id, age] : test_data) {
+    nlohmann::json doc;
+    doc["user_id"] = user_id;
+    doc["user_age"] = age;
+    doc["user_name"] = "user_" + std::to_string(user_id);
+
+    s = store.Insert("users_ordering", doc);
+    ASSERT_TRUE(s.ok());
+  }
+
+  // Test 1: Get all users and verify they're ordered by age
+  std::vector<nlohmann::json> all_users;
+  s = store.GetAll("users_ordering", all_users);
+  ASSERT_TRUE(s.ok());
+  ASSERT_EQ(all_users.size(), 8);
+
+  // Verify ages are in ascending order
+  for (size_t i = 0; i < all_users.size(); ++i) {
+    int32_t actual_id = all_users[i]["user_id"].get<int32_t>();
+    ASSERT_EQ(actual_id, i + 1) << "Age at position " << i << " should be "
+                                << i + 1 << " but got " << actual_id;
+  }
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, CompositeKeyOrderingTest) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+
+  leveldb::Options options;
+  options.primary_key = "user_id";
+  std::string seperator = "|";
+
+  class CleanupGuard {
+  public:
+    CleanupGuard(leveldb::Options &opts) : options_(opts) {}
+    ~CleanupGuard() {
+      std::cout << "Cleaning up filter policy" << std::endl;
+      if (options_.filter_policy) {
+        delete options_.filter_policy;
+        options_.filter_policy = nullptr;
+      }
+    }
+
+  private:
+    leveldb::Options &options_;
+  };
+
+  CleanupGuard cleanup(options);
+
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"age": "integer"},
+        {"composite_key": "string"},
+        {"user_name": "string"}
+      ],
+      "required": ["user_id", "age", "composite_key"]
+    }
+  )"_json;
+
+  s = store.CreateCollection("users_composite", options, schema);
+  ASSERT_TRUE(s.ok());
+
+  std::vector<std::tuple<int32_t, int32_t, std::string>> test_data = {
+      {1, 25, "user_1"}, {2, 25, "user_2"}, {3, 15, "user_3"},
+      {4, 35, "user_4"}, {5, 25, "user_5"}, {6, 15, "user_6"},
+      {7, 35, "user_7"}, {8, 5, "user_8"},
+  };
+
+  for (const auto &[user_id, age, name] : test_data) {
+    nlohmann::json doc;
+
+    std::string encoded_age = leveldb::Encoder::EncodeInt32(age);
+    std::string encoded_id = leveldb::Encoder::EncodeInt32(user_id);
+    // age|encoded_sk|encoded_pk
+    std::string correct_key =
+        "age" + seperator + encoded_age + seperator + encoded_id;
+
+    s = store.Insert("users_composite", correct_key, "");
+    ASSERT_TRUE(s.ok());
+  }
+
+  // Test 1: Get all users and verify they're ordered by composite key
+  std::vector<std::pair<std::string, std::string>> kv;
+  s = store.GetAll("users_composite", kv);
+  ASSERT_TRUE(s.ok());
+
+  for (const auto &user : kv) {
+    std::string key = user.first;
+    size_t pos1 = key.find(seperator);
+    size_t pos2 = key.find(seperator, pos1 + 1);
+
+    if (pos1 != std::string::npos && pos2 != std::string::npos) {
+      std::string encoded_age = key.substr(pos1 + 1, pos2 - pos1 - 1);
+      std::string encoded_id = key.substr(pos2 + 1);
+
+      int32_t decoded_age, decoded_id;
+      if (leveldb::Encoder::DecodeInt32(leveldb::Slice(encoded_age),
+                                        &decoded_age) &&
+          leveldb::Encoder::DecodeInt32(leveldb::Slice(encoded_id),
+                                        &decoded_id)) {
+        std::cout << "age|" << decoded_age << "|" << decoded_id << std::endl;
+      }
+    }
+  }
+
+  // Test 2: Prefix search for age=25
+  int start_age = 25;
+  std::string encoded_age = leveldb::Encoder::EncodeInt32(start_age);
+  std::string prefixKey = "age" + seperator + encoded_age + seperator;
+  std::cout << "PrefixKey (encoded): " << prefixKey << std::endl;
+
+  std::vector<std::string> matched_keys;
+  s = store.PrefixGet("users_composite", prefixKey, matched_keys);
+  ASSERT_TRUE(s.ok());
+  ASSERT_EQ(matched_keys.size(), 3); // Should get 3 users with age=25
+
+  std::cout << "Found " << kv.size() << " users with age=" << start_age << ":"
+            << std::endl;
+  for (const auto &key : matched_keys) {
+    std::cout << "Key: " << key << std::endl;
+  }
+
+  // Test 3: Prefix search for age=15
+  int start_age2 = 15;
+  std::string encoded_age2 = leveldb::Encoder::EncodeInt32(start_age2);
+  std::string prefixKey2 = "age" + seperator + encoded_age2 + seperator;
+
+  matched_keys.clear();
+  s = store.PrefixGet("users_composite", prefixKey2, matched_keys);
+  ASSERT_TRUE(s.ok());
+  ASSERT_EQ(matched_keys.size(), 2); // Should get 2 users with age=15
+
+  std::cout << "Found " << kv.size() << " users with age=" << start_age2 << ":"
+            << std::endl;
+  for (const auto &user : kv) {
+    std::cout << "Key: " << user.first << std::endl;
+  }
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, AddIndexTest) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+
+  leveldb::Options options;
+  options.primary_key = "user_id";
+  options.secondary_key = "department_id";
+  options.filter_policy = leveldb::NewBloomFilterPolicy(20);
+
+  class CleanupGuard {
+  public:
+    CleanupGuard(leveldb::Options &opts) : options_(opts) {}
+    ~CleanupGuard() {
+      std::cout << "Cleaning up filter policy" << std::endl;
+      if (options_.filter_policy) {
+        delete options_.filter_policy;
+        options_.filter_policy = nullptr;
+      }
+    }
+
+  private:
+    leveldb::Options &options_;
+  };
+
+  CleanupGuard cleanup(options);
+
+  // Create schema with required integer fields
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"age": "integer"},
+        {"department_id": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": ["user_id", "age", "department_id", "user_name"]
+    }
+  )"_json;
+
+  s = store.CreateCollection("users_indexed", options, schema);
+  ASSERT_TRUE(s.ok());
+
+  std::vector<std::tuple<int32_t, int32_t, int32_t, std::string>> test_data = {
+      {1, 25, 101, "Alice"}, {2, 25, 102, "Bob"},   {3, 30, 101, "Charlie"},
+      {4, 30, 102, "David"}, {5, 25, 103, "Eve"},   {6, 35, 101, "Frank"},
+      {7, 35, 102, "Grace"}, {8, 25, 103, "Henry"},
+  };
+
+  for (const auto &[user_id, age, dept_id, name] : test_data) {
+    nlohmann::json doc;
+    doc["user_id"] = user_id;
+    doc["age"] = age;
+    doc["department_id"] = dept_id;
+    doc["user_name"] = name;
+
+    s = store.InsertWithIndex("users_indexed", doc);
+    ASSERT_TRUE(s.ok()) << "Failed to insert with index for user " << user_id;
+  }
+
+  std::vector<std::pair<std::string, std::string>> kv;
+  s = store.GetAll("users_indexed", kv);
+  ASSERT_TRUE(s.ok());
+
+  std::vector<nlohmann::json> matched_records;
+  store.Find("users_indexed", "age", "25", matched_records);
+  ASSERT_TRUE(s.ok());
+  ASSERT_EQ(matched_records.size(), 4);
+  for (const auto &record : matched_records) {
+    std::cout << "Matched Record: " << record.dump() << std::endl;
+  }
+  std::cout << "--------------------------------" << std::endl;
+
+  matched_records.clear();
+  store.Find("users_indexed", "department_id", "101", matched_records);
+  ASSERT_TRUE(s.ok());
+  ASSERT_EQ(matched_records.size(), 3);
+  for (const auto &record : matched_records) {
+    std::cout << "Matched Record: " << record.dump() << std::endl;
+  }
+  std::cout << "--------------------------------" << std::endl;
+
+  matched_records.clear();
+  store.Find("users_indexed", "user_id", "1", matched_records);
+  ASSERT_TRUE(s.ok());
+  ASSERT_EQ(matched_records.size(), 1);
+  for (const auto &record : matched_records) {
+    std::cout << "Matched Record: " << record.dump() << std::endl;
+  }
+  std::cout << "--------------------------------" << std::endl;
+
+  this->TearDown();
+}
+
+TEST(DocumentStoreTest, CatalogStructTest) {
+  leveldb::Status s;
+  DocumentStore store("/tmp/test_catalog", s);
+  ASSERT_TRUE(s.ok());
+
+  // Create test metadata JSON
+  nlohmann::json metadata = {
+      {"options", {{"primary_key", "user_id"}, {"secondary_key", "email"}}},
+      {"schema",
+       {{"fields",
+         {{{"user_id", "integer"}},
+          {{"age", "integer"}},
+          {{"department_id", "integer"}},
+          {{"user_name", "string"}}}},
+        {"required", {"user_id", "age", "department_id", "user_name"}}}}};
+
+  // Create Catalog from metadata
+  Catalog catalog(metadata);
+
+  // Test primary and secondary keys
+  ASSERT_TRUE(catalog.primary_key == "user_id");
+  ASSERT_TRUE(catalog.secondary_key == "email");
+
+  // Test fields map
+  ASSERT_TRUE(catalog.fields["user_id"] == "integer");
+  ASSERT_TRUE(catalog.fields["age"] == "integer");
+  ASSERT_TRUE(catalog.fields["department_id"] == "integer");
+  ASSERT_TRUE(catalog.fields["user_name"] == "string");
+
+  // Test required fields set
+  ASSERT_TRUE(catalog.required.find("user_id") != catalog.required.end());
+  ASSERT_TRUE(catalog.required.find("age") != catalog.required.end());
+  ASSERT_TRUE(catalog.required.find("department_id") != catalog.required.end());
+  ASSERT_TRUE(catalog.required.find("user_name") != catalog.required.end());
+  ASSERT_TRUE(catalog.required.size() == 4);
 }
 
 } // namespace docstore

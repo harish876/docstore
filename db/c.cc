@@ -118,6 +118,12 @@ struct leveldb_filterpolicy_t : public FilterPolicy {
     free(filter);
   }
 
+  virtual int GetBitsPerKey() const {
+    // Default implementation - return a reasonable default value
+    // This should be overridden by specific implementations
+    return 10;
+  }
+
   virtual bool KeyMayMatch(const Slice& key, const Slice& filter) const {
     return (*key_match_)(state_, key.data(), key.size(),
                          filter.data(), filter.size());
@@ -504,6 +510,7 @@ leveldb_filterpolicy_t* leveldb_filterpolicy_create_bloom(int bits_per_key) {
     const FilterPolicy* rep_;
     ~Wrapper() { delete rep_; }
     const char* Name() const { return rep_->Name(); }
+    int GetBitsPerKey() const { return rep_->GetBitsPerKey(); }
     void CreateFilter(const Slice* keys, int n, std::string* dst) const {
       return rep_->CreateFilter(keys, n, dst);
     }

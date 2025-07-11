@@ -118,6 +118,7 @@ set(LEVELDB_SOURCES
   util/filter_policy.cc
   util/hash.cc
   util/histogram.cc
+  util/encoding.cc
   util/logging.cc
   util/options.cc
   util/status.cc

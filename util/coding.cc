@@ -158,8 +158,6 @@ const char* GetVarint64Ptr(const char* p, const char* limit, uint64_t* value) {
 }
 
 bool GetVarint64(Slice* input, uint64_t* value) {
-    //std::ofstream outputFile;
-    //outputFile.open("/Users/nakshikatha/Desktop/test codes/debug3.txt", std::ofstream::out | std::ofstream::app);
   const char* p = input->data();
   const char* limit = p + input->size();
   const char* q = GetVarint64Ptr(p, limit, value);

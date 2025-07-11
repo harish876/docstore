@@ -134,6 +134,7 @@ class InternalFilterPolicy : public FilterPolicy {
  public:
   explicit InternalFilterPolicy(const FilterPolicy* p) : user_policy_(p) { }
   virtual const char* Name() const;
+  virtual int GetBitsPerKey() const { return user_policy_->GetBitsPerKey(); }
   virtual void CreateFilter(const Slice* keys, int n, std::string* dst) const;
   virtual bool KeyMayMatch(const Slice& key, const Slice& filter) const;
 };

@@ -32,6 +32,8 @@ public:
   // passed to methods of this type.
   virtual const char *Name() const = 0;
 
+  virtual int GetBitsPerKey() const = 0;
+
   // keys[0,n-1] contains a list of keys (potentially with duplicates)
   // that are ordered according to the user supplied comparator.
   // Append a filter that summarizes keys[0,n-1] to *dst.

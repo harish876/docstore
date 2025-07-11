@@ -39,11 +39,9 @@ DocumentStore::DocumentStore(const std::string &base_path, leveldb::Status &s)
 }
 
 DocumentStore::~DocumentStore() {
-  // Clear all database connections and clean up filter policies
   {
     std::lock_guard<std::mutex> lock(collections_mutex_);
-    // Clean up filter policies
-    for (auto& [collection_name, filter_policy] : filter_policies_) {
+    for (auto &[collection_name, filter_policy] : filter_policies_) {
       if (filter_policy) {
         delete filter_policy;
       }
@@ -51,7 +49,7 @@ DocumentStore::~DocumentStore() {
     filter_policies_.clear();
     collections_.clear();
   }
-  
+
   // Reset the registry
   collection_registry_.reset();
 }
@@ -96,7 +94,12 @@ DocumentStore::CreateCollection(const std::string &collection_name,
     std::lock_guard<std::mutex> lock(collections_mutex_);
     collections_[collection_name] = std::unique_ptr<leveldb::DB>(db);
   }
-  
+
+  {
+    std::lock_guard<std::mutex> lock(collections_mutex_);
+    catalog_map_[collection_name] = Catalog(collection_metadata);
+  }
+
   return status;
 }
 
@@ -146,7 +149,12 @@ DocumentStore::OpenCollection(const std::string &collection_name,
     std::lock_guard<std::mutex> lock(collections_mutex_);
     collections_[collection_name] = std::unique_ptr<leveldb::DB>(db);
   }
-  
+
+  {
+    std::lock_guard<std::mutex> lock(collections_mutex_);
+    catalog_map_[collection_name] = Catalog(metadata);
+  }
+
   return status;
 }
 
@@ -194,7 +202,7 @@ leveldb::Status DocumentStore::Get(const std::string &collection_name,
                                    std::string key, std::string &value) {
 
   leveldb::Status s;
-  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
   if (!db) {
     return s;
   }
@@ -211,14 +219,14 @@ leveldb::Status DocumentStore::GetSec(
     const std::string &collection_name, const std::string &secondary_key,
     std::vector<leveldb::SecondayKeyReturnVal> *value, int top_k) {
   leveldb::Status s;
-  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
   if (!db) {
     return s;
   }
   s = db->Get(leveldb::ReadOptions(), secondary_key, value, top_k);
   if (!s.ok()) {
-    std::cerr << "Failed to get secondary key from collection " << collection_name << ": "
-              << s.ToString() << std::endl;
+    std::cerr << "Failed to get secondary key from collection "
+              << collection_name << ": " << s.ToString() << std::endl;
   }
 
   return s;
@@ -229,15 +237,15 @@ leveldb::Status DocumentStore::RangeGetSec(
     const std::string &secondary_end_key,
     std::vector<leveldb::SecondayKeyReturnVal> *value, int top_k) {
   leveldb::Status s;
-  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
   if (!db) {
     return s;
   }
   s = db->RangeGet(leveldb::ReadOptions(), secondary_start_key,
                    secondary_end_key, value, top_k);
   if (!s.ok()) {
-    std::cerr << "Failed to range get secondary key from collection " << collection_name << ": "
-              << s.ToString() << std::endl;
+    std::cerr << "Failed to range get secondary key from collection "
+              << collection_name << ": " << s.ToString() << std::endl;
   }
 
   return s;
@@ -247,7 +255,7 @@ leveldb::Status DocumentStore::Insert(const std::string &collection_name,
                                       nlohmann::json &document) {
 
   leveldb::Status s;
-  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
   if (!db) {
     return s;
   }
@@ -256,6 +264,7 @@ leveldb::Status DocumentStore::Insert(const std::string &collection_name,
   if (!s.ok()) {
     return s;
   }
+
   if (metadata.contains("schema")) {
     s = ValidateSchema(document, metadata["schema"]);
     if (!s.ok()) {
@@ -271,12 +280,11 @@ leveldb::Status DocumentStore::Insert(const std::string &collection_name,
 
   return s;
 }
-
 leveldb::Status DocumentStore::Insert(const std::string &collection_name,
                                       std::string key, std::string value) {
 
   leveldb::Status s;
-  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
   if (!db) {
     return s;
   }
@@ -297,77 +305,45 @@ leveldb::Status DocumentStore::ExtendMetadata(const nlohmann::json &document,
   return leveldb::Status();
 }
 
-/**
-  Supports
-    - string
-    - integer
-    - boolean
-    - array [Non Recursive Check]
-    - null
-
-    Example Schema Object. Extend support only for data types
-    json schema = {
-      {"fields",
-       [
-           {"id", "string"},
-           {"name", "string"},
-           {"age", "integer"},
-           {"is_active","boolean"},
-       ],
-      {"required", ["id", "name", "age", "is_active"]},
-  };
- */
 leveldb::Status DocumentStore::ValidateSchema(const nlohmann::json &document,
                                               const nlohmann::json &schema) {
   leveldb::Status s;
   if (!isValidJSON(schema)) {
     return s.Corruption("Invalid Schema Object. Invalid JSON");
   }
-  if (!schema.contains("required") ||
-      (schema.contains("required") && !schema["required"].is_array())) {
-    return s.Corruption("Invalid Schema Object. 'required' field missing");
-  }
 
-  nlohmann::json::array_t required_fields = schema["required"];
-  for (auto field : required_fields) {
-    if (!document.contains(field.get<std::string>().c_str())) {
+  Catalog catalog(schema);
+
+  for (const auto &field_name : catalog.required) {
+    if (!document.contains(field_name)) {
       char buffer[256];
       std::snprintf(buffer, sizeof(buffer),
                     "Invalid document. Missing required field: %s",
-                    field.get<std::string>().c_str());
+                    field_name.c_str());
       return s.InvalidArgument(buffer);
     }
   }
 
-  if (!schema.contains("fields") ||
-      (schema.contains("fields") && !schema["fields"].is_array())) {
-    return s.Corruption("Invalid Schema Object. 'fields' field missing");
-  }
+  for (const auto &[field_name, field_type] : catalog.fields) {
+    if (!document.contains(field_name)) {
+      continue;
+    }
 
-  nlohmann::json::array_t fields = schema["fields"];
-  for (const auto &field : fields) {
-    for (auto &[field_name, field_type] : field.items()) {
-      if (!document.contains(field_name)) {
-        continue;
-      }
+    auto document_value = document[field_name];
 
-      auto document_value = document[field_name];
-
-      std::string field_type_str = field_type.get<std::string>();
-      if (!validate_type(document_value, field_type_str)) {
-        char buffer[256];
-        std::snprintf(buffer, sizeof(buffer),
-                      "Type mismatch for field '%s'. Expected type: %s.",
-                      field_name.c_str(),
-                      field_type.get<std::string>().c_str());
-        return s.InvalidArgument(buffer);
-      }
+    if (!validate_type(document_value, const_cast<std::string &>(field_type))) {
+      char buffer[256];
+      std::snprintf(buffer, sizeof(buffer),
+                    "Type mismatch for field '%s'. Expected type: %s.",
+                    field_name.c_str(), field_type.c_str());
+      return s.InvalidArgument(buffer);
     }
   }
 
   return s;
 }
 
+// TODO: Revisit this
 bool DocumentStore::validate_type(nlohmann::basic_json<> &document_value,
                                   std::string &type) {
   if (type == "string") {
@@ -397,7 +373,7 @@ bool DocumentStore::isValidJSON(const nlohmann::json &document) {
 leveldb::Status DocumentStore::GetAll(const std::string &collection_name,
                                       std::vector<nlohmann::json> &documents) {
   leveldb::Status s;
-  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
   if (!db) {
     return s;
   }
@@ -424,12 +400,11 @@ leveldb::Status DocumentStore::GetAll(const std::string &collection_name,
   return s;
 }
 
-leveldb::Status DocumentStore::GetRange(const std::string &collection_name,
-                                        const std::string &start_key,
-                                        const std::string &end_key,
-                                        std::vector<nlohmann::json> &documents) {
+leveldb::Status
+DocumentStore::GetAll(const std::string &collection_name,
+                      std::vector<std::pair<std::string, std::string>> &kv) {
   leveldb::Status s;
-  leveldb::DB* db = GetOrCreateDB(collection_name, s);
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
   if (!db) {
     return s;
   }
@@ -437,7 +412,32 @@ leveldb::Status DocumentStore::GetRange(const std::string &collection_name,
   std::unique_ptr<leveldb::Iterator> it(
       db->NewIterator(leveldb::ReadOptions()));
 
-  for (it->Seek(start_key); it->Valid() && it->key().ToString() <= end_key; it->Next()) {
+  for (it->SeekToFirst(); it->Valid(); it->Next()) {
+    kv.emplace_back(it->key().ToString(), it->value().ToString());
+  }
+
+  s = it->status();
+  if (!s.ok()) {
+    std::cerr << "Error during iteration: " << s.ToString() << std::endl;
+  }
+
+  return s;
+}
+
+leveldb::Status DocumentStore::GetRange(
+    const std::string &collection_name, const std::string &start_key,
+    const std::string &end_key, std::vector<nlohmann::json> &documents) {
+  leveldb::Status s;
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
+  }
+
+  std::unique_ptr<leveldb::Iterator> it(
+      db->NewIterator(leveldb::ReadOptions()));
+
+  for (it->Seek(start_key); it->Valid() && it->key().ToString() <= end_key;
+       it->Next()) {
     nlohmann::json doc;
     auto parse_result =
         nlohmann::json::parse(it->value().ToString(), nullptr, false);
@@ -456,8 +456,394 @@ leveldb::Status DocumentStore::GetRange(const std::string &collection_name,
   return s;
 }
 
-leveldb::DB* DocumentStore::GetOrCreateDB(const std::string& collection_name, leveldb::Status& s) {
-  // Try to get existing connection
+leveldb::Status DocumentStore::GetRange(
+    const std::string &collection_name, const std::string &start_key,
+    const std::string &end_key,
+    std::vector<std::pair<std::string, std::string>> &kv_pairs) {
+  leveldb::Status s;
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
+  }
+
+  std::unique_ptr<leveldb::Iterator> it(
+      db->NewIterator(leveldb::ReadOptions()));
+
+  for (it->Seek(start_key); it->Valid() && it->key().ToString() <= end_key;
+       it->Next()) {
+    kv_pairs.push_back({it->key().ToString(), it->value().ToString()});
+  }
+
+  s = it->status();
+  if (!s.ok()) {
+    std::cerr << "Error during iteration: " << s.ToString() << std::endl;
+  }
+
+  return s;
+}
+
+leveldb::Status DocumentStore::PrefixGet(const std::string &collection_name,
+                                         const std::string &prefix,
+                                         std::vector<std::string> &kv_pairs) {
+  leveldb::Status s;
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
+  }
+
+  std::unique_ptr<leveldb::Iterator> it(
+      db->NewIterator(leveldb::ReadOptions()));
+
+  for (it->Seek(prefix); it->Valid() && it->key().starts_with(prefix);
+       it->Next()) {
+    kv_pairs.push_back({it->key().ToString()});
+  }
+
+  s = it->status();
+  if (!s.ok()) {
+    std::cerr << "Error during iteration: " << s.ToString() << std::endl;
+  }
+  return s;
+}
+
+leveldb::Status DocumentStore::PrefixGet(leveldb::DB *db,
+                                         const std::string &prefix,
+                                         std::vector<std::string> &kv_pairs) {
+  leveldb::Status s;
+  std::unique_ptr<leveldb::Iterator> it(
+      db->NewIterator(leveldb::ReadOptions()));
+
+  for (it->Seek(prefix); it->Valid() && it->key().starts_with(prefix);
+       it->Next()) {
+    kv_pairs.push_back({it->key().ToString()});
+  }
+
+  s = it->status();
+  if (!s.ok()) {
+    std::cerr << "Error during iteration: " << s.ToString() << std::endl;
+  }
+  return s;
+}
+
+leveldb::Status
+DocumentStore::GetByCompositeKey(leveldb::DB *db, const Catalog *catalog,
+                                 const vector<std::string> &composite_keys,
+                                 std::vector<nlohmann::json> &matched_records) {
+  leveldb::Status s;
+
+  for (const auto &composite_key : composite_keys) {
+    std::string id;
+    if (!DecodeCompositeKey(composite_key, catalog, id)) {
+      continue;
+    }
+    std::string document;
+    s = db->Get(leveldb::ReadOptions(), id, &document);
+    if (!s.ok()) {
+      std::cerr << "Failed to get document: " << s.ToString() << std::endl;
+      continue;
+    }
+    matched_records.push_back(nlohmann::json::parse(document));
+  }
+  return s;
+}
+
+leveldb::Status
+DocumentStore::GetByCompositeKey(const std::string &collection_name,
+                                 const vector<std::string> &composite_keys,
+                                 std::vector<nlohmann::json> &matched_records) {
+  leveldb::Status s;
+
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
+  }
+  const Catalog *catalog = GetCatalog(collection_name);
+  if (!catalog) {
+    return leveldb::Status::InvalidArgument("Collection metadata not found");
+  }
+
+  for (const auto &composite_key : composite_keys) {
+    std::string id;
+    if (!DecodeCompositeKey(composite_key, catalog, id)) {
+      continue;
+    }
+    std::string document;
+    s = db->Get(leveldb::ReadOptions(), id, &document);
+    if (!s.ok()) {
+      std::cerr << "Failed to get document: " << s.ToString() << std::endl;
+      continue;
+    }
+    matched_records.push_back(nlohmann::json::parse(document));
+  }
+  return s;
+}
+
+leveldb::Status
+DocumentStore::Find(const std::string &collection_name,
+                    const std::string &field_name,
+                    const std::string &field_value,
+                    std::vector<nlohmann::json> &matched_records) {
+  leveldb::Status s;
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return leveldb::Status::InvalidArgument("Database not found");
+  }
+  const Catalog *catalog = GetCatalog(collection_name);
+  if (!catalog) {
+    return leveldb::Status::InvalidArgument("Collection metadata not found");
+  }
+
+  if (field_name == catalog->primary_key) {
+    std::string document;
+    s = db->Get(leveldb::ReadOptions(), field_value, &document);
+    if (!s.ok()) {
+      std::cerr << "Failed to get document from collection " << collection_name
+                << ": " << s.ToString() << std::endl;
+      return s;
+    }
+    matched_records.push_back(nlohmann::json::parse(document));
+  } else if (!catalog->secondary_key.empty() &&
+             field_name == catalog->secondary_key) {
+    std::vector<leveldb::SecondayKeyReturnVal> value;
+    s = db->Get(leveldb::ReadOptions(), field_value, &value, 1000);
+
+    if (!s.ok()) {
+      std::cerr << "Failed to get document from collection " << collection_name
+                << ": " << s.ToString() << std::endl;
+      return s;
+    }
+    for (const auto &doc : value) {
+      matched_records.push_back(nlohmann::json::parse(doc.value));
+    }
+  } else if (catalog->required.find(field_name) != catalog->required.end()) {
+    auto field_type_it = catalog->fields.find(field_name);
+    
+    std::string encoded_field_value =
+        EncodeFieldValue(field_value, field_type_it->second);
+    std::string composite_key_prefix =
+        EncodeCompositeKeyPrefix(field_name, encoded_field_value);
+
+    std::cout << "Composite key prefix: " << composite_key_prefix << std::endl;
+    std::vector<std::string> kv_pairs;
+    s = PrefixGet(collection_name, composite_key_prefix, kv_pairs);
+    if (!s.ok()) {
+      std::cerr << "Failed to get document from collection " << collection_name
+                << ": " << s.ToString() << std::endl;
+      return leveldb::Status::InvalidArgument("Failed to get documents");
+    }
+    
+  
+    std::vector<std::string> composite_keys;
+    for (const auto &key : kv_pairs) {
+      composite_keys.push_back(key);
+    }
+    
+    s = GetByCompositeKey(db, catalog, composite_keys, matched_records);
+    if (!s.ok()) {
+      std::cerr << "Failed to get document from collection " << collection_name
+                << ": " << s.ToString() << std::endl;
+      return leveldb::Status::InvalidArgument("Failed to get documents");
+    }
+    return s;
+  }
+
+  return s;
+}
+
+std::string DocumentStore::DecodeFieldValue(const std::string &encoded_value,
+                                            const std::string &field_type) {
+  if (field_type == "integer") {
+    int32_t decoded_int;
+    if (leveldb::IntEncoder::DecodeInt32(leveldb::Slice(encoded_value),
+                                         &decoded_int)) {
+      return std::to_string(decoded_int);
+    } else {
+      return "";
+    }
+  } else if (field_type == "string") {
+    return encoded_value;
+  } else {
+    std::cerr << "Unsupported field type for decoding: " << field_type
+              << std::endl;
+    return "";
+  }
+}
+
+bool DocumentStore::DecodeCompositeKey(const std::string &composite_key,
+                                       const Catalog *catalog,
+                                       std::string &id) {
+  const std::string separator = "|";
+  std::vector<std::string> parts;
+
+  size_t pos = 0;
+  size_t next_pos;
+
+  while ((next_pos = composite_key.find(separator, pos)) != std::string::npos) {
+    parts.push_back(composite_key.substr(pos, next_pos - pos));
+    pos = next_pos + separator.length();
+  }
+
+  if (pos < composite_key.length()) {
+    parts.push_back(composite_key.substr(pos));
+  }
+
+  if (parts.size() != 3) {
+    return false;
+  }
+
+  std::string field_name = parts[0];
+  std::string encoded_field_value = parts[1];
+  std::string encoded_primary_key_value = parts[2];
+
+  if (!catalog || catalog->fields.find(field_name) == catalog->fields.end()) {
+    return false;
+  }
+
+  auto field_type_it = catalog->fields.find(field_name);
+  if (field_type_it == catalog->fields.end()) {
+    return false;
+  }
+
+  std::string primary_key_field_type = catalog->fields.at(catalog->primary_key);
+  std::string decoded_primary_key_value =
+      DecodeFieldValue(encoded_primary_key_value, primary_key_field_type);
+  if (decoded_primary_key_value.empty()) {
+    return false;
+  }
+
+  std::string field_type = field_type_it->second;
+  std::string decoded_field_value =
+      DecodeFieldValue(encoded_field_value, field_type);
+  if (decoded_field_value.empty()) {
+    return false;
+  }
+
+  id = decoded_primary_key_value;
+  return true;
+}
+
+const Catalog *DocumentStore::GetCatalog(const std::string &collection_name) {
+  std::lock_guard<std::mutex> lock(collections_mutex_);
+  auto it = catalog_map_.find(collection_name);
+  if (it != catalog_map_.end()) {
+    return &it->second;
+  }
+  return nullptr;
+}
+
+leveldb::Status
+DocumentStore::InsertWithIndex(const std::string &collection_name,
+                               nlohmann::json &document) {
+  leveldb::Status s;
+
+  s = Insert(collection_name, document);
+  if (!s.ok()) {
+    return s;
+  }
+
+  const Catalog *catalog = GetCatalog(collection_name);
+  if (!catalog) {
+    return leveldb::Status::InvalidArgument("Collection metadata not found");
+  }
+  s = AddIndex(collection_name, document);
+  return s;
+}
+
+std::string DocumentStore::EncodeFieldValue(const std::string &field_value,
+                                            const std::string &field_type) {
+  if (field_type == "integer") {
+    int32_t int_value = std::stoi(field_value);
+    return leveldb::IntEncoder::EncodeInt32(int_value);
+  } else if (field_type == "string") {
+    return field_value;
+  } else {
+    return "";
+  }
+}
+
+leveldb::Status DocumentStore::AddIndex(const std::string &collection_name,
+                                        const nlohmann::json &document) {
+  leveldb::Status s;
+  leveldb::DB *db = GetOrCreateDB(collection_name, s);
+  if (!db) {
+    return s;
+  }
+
+  const Catalog *catalog = GetCatalog(collection_name);
+  if (!catalog) {
+    return leveldb::Status::InvalidArgument("Collection metadata not found");
+  }
+
+  if (catalog->required.empty()) {
+    return leveldb::Status::InvalidArgument(
+        "No required fields found in schema");
+  }
+
+  std::string encoded_primary_key_value;
+  if (!catalog->primary_key.empty() &&
+      document.contains(catalog->primary_key)) {
+    const nlohmann::json &field_value = document[catalog->primary_key];
+    auto field_type_it = catalog->fields.find(catalog->primary_key);
+    if (field_type_it != catalog->fields.end()) {
+      encoded_primary_key_value =
+          EncodeFieldValue(field_value.dump(), field_type_it->second);
+    }
+  }
+
+  for (const auto &field_name : catalog->required) {
+    std::string encoded_field_value;
+
+    if (!document.contains(field_name)) {
+      continue;
+    }
+
+    const nlohmann::json &field_value = document[field_name];
+    auto field_type_it = catalog->fields.find(field_name);
+    if (field_type_it == catalog->fields.end()) {
+      continue;
+    }
+
+    if (field_type_it->second != "integer" &&
+        field_type_it->second != "string") {
+      continue;
+    }
+
+    encoded_field_value = EncodeFieldValue(field_value.dump(), field_type_it->second);
+    if (encoded_field_value.empty()) {
+      continue;
+    }
+
+    std::string composite_key = EncodeCompositeKey(
+        field_name, encoded_field_value, encoded_primary_key_value);
+
+    s = db->Put(leveldb::WriteOptions(), composite_key, "");
+    if (!s.ok()) {
+      std::cerr << "Failed to add index for collection " << collection_name
+                << ": " << s.ToString() << std::endl;
+      return s;
+    }
+  }
+  return s;
+}
+
+std::string
+DocumentStore::EncodeCompositeKey(const std::string &field_name,
+                                  const std::string &encoded_field_value,
+                                  const std::string &encoded_primary_key_value,
+                                  const std::string &separator) {
+  return field_name + separator + encoded_field_value + separator +
+         encoded_primary_key_value;
+}
+
+std::string
+DocumentStore::EncodeCompositeKeyPrefix(const std::string &field_name,
+                                        const std::string &encoded_field_value,
+                                        const std::string &separator) {
+  return field_name + separator + encoded_field_value;
+}
+
+leveldb::DB *DocumentStore::GetOrCreateDB(const std::string &collection_name,
+                                          leveldb::Status &s) {
   {
     std::lock_guard<std::mutex> lock(collections_mutex_);
     auto it = collections_.find(collection_name);
@@ -465,45 +851,38 @@ leveldb::DB* DocumentStore::GetOrCreateDB(const std::string& collection_name, le
       return it->second.get();
     }
   }
-  
-  // Not found, need to open it
+
   nlohmann::json metadata;
   s = CheckCollectionInRegistry(collection_name, metadata);
   if (!s.ok()) {
     return nullptr;
   }
-  
-  // Parse options
+
   leveldb::Options options;
   options = options.FromJSON(metadata["options"], s);
   if (!s.ok()) {
     return nullptr;
   }
-  
-  // Store the filter policy for later cleanup
-  const leveldb::FilterPolicy* filter_policy = options.filter_policy;
-  
-  // Open database
-  leveldb::DB* db = nullptr;
+
+  const leveldb::FilterPolicy *filter_policy = options.filter_policy;
+
+  leveldb::DB *db = nullptr;
   s = leveldb::DB::Open(options, base_path_ + "/" + collection_name, &db);
   if (!s.ok()) {
     std::cerr << "Failed to open collection " << collection_name << ": "
               << s.ToString() << std::endl;
-    // Clean up filter policy if database open failed
     if (filter_policy) {
       delete filter_policy;
     }
     return nullptr;
   }
-  
-  // Store in map with filter policy for cleanup
+
   {
     std::lock_guard<std::mutex> lock(collections_mutex_);
     collections_[collection_name] = std::unique_ptr<leveldb::DB>(db);
-    // Store filter policy for cleanup when database is closed
     filter_policies_[collection_name] = filter_policy;
   }
-  
+
   return db;
 }
 

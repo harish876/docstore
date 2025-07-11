@@ -32,6 +32,10 @@ class BloomFilterPolicy : public FilterPolicy {
     return "leveldb.BuiltinBloomFilter";
   }
 
+  virtual int GetBitsPerKey() const {
+    return bits_per_key_;
+  }
+
   virtual void CreateFilter(const Slice* keys, int n, std::string* dst) const {
    
     // Compute bloom filter size (in both bits and bytes)
@@ -62,10 +66,6 @@ class BloomFilterPolicy : public FilterPolicy {
   }
 
   virtual bool KeyMayMatch(const Slice& key, const Slice& bloom_filter) const {
-    //std::ofstream outputFile;
-    //outputFile.open("/Users/nakshikatha/Desktop/test codes/filter.txt",std::ofstream::out | std::ofstream::app);
-    //outputFile<<"inside KeyMayMatch\n";
-    //outputFile<<key.ToString()<<std::endl;
     const size_t len = bloom_filter.size();
     if (len < 2) return false;
 

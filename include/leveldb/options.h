@@ -10,6 +10,7 @@
 #include "nlohmann/json.hpp"
 #include <iostream>
 #include <stddef.h>
+#include <unordered_set>
 #include <vector>
 using namespace std;
 
@@ -155,7 +156,11 @@ struct Options {
   string secondary_key;
   string primary_key;
   string interval_tree_file_name;
-  //////////////////Secondary Filter////////////
+  
+  string key_seperator = "|";
+  
+  // Composite index support
+  std::vector<std::string> composite_indexes;
 
   Options();
 
@@ -175,18 +180,16 @@ struct Options {
     json_obj["primary_key"] = this->primary_key;
     json_obj["secondary_key"] = this->secondary_key;
     json_obj["interval_tree_file_name"] = this->interval_tree_file_name;
+    json_obj["composite_indexes"] = this->composite_indexes;
     if (this->filter_policy) {
       std::string filter_policy_name = std::string(this->filter_policy->Name());
       if (filter_policy_name.compare("leveldb.BuiltinBloomFilter") == 0) {
         json_obj["filter_policy"] = filter_policy_name;
-        // TODO: remove hardcoding filter policyt bits_per_key
-        json_obj["filter_policy_bits_per_key"] = 20;
+        json_obj["filter_policy_bits_per_key"] = this->filter_policy->GetBitsPerKey();
       } else {
         // Not Supported
       }
     }
-    // TODO filter policy rebuild object from scratch
-
     // Note: Pointers like `comparator`, `env`, `info_log`, `block_cache`, and
     // `filter_policy` are not serialized because they are not trivially
     // serializable.
@@ -196,20 +199,18 @@ struct Options {
   inline Options FromJSON(const nlohmann::json &json_obj, leveldb::Status &s) {
     leveldb::Options options;
     try {
-      // Deserialize fields from the JSON object with default values
       options.create_if_missing = json_obj.value("create_if_missing", false);
       options.error_if_exists = json_obj.value("error_if_exists", false);
       options.paranoid_checks = json_obj.value("paranoid_checks", false);
       options.write_buffer_size = json_obj.value(
-          "write_buffer_size", size_t(4 * 1024 * 1024)); // Default: 4MB
+          "write_buffer_size", size_t(4 * 1024 * 1024));
       options.max_open_files =
-          json_obj.value("max_open_files", 1000); // Default: 1000
+          json_obj.value("max_open_files", 1000);
       options.block_size =
-          json_obj.value("block_size", size_t(4 * 1024)); // Default: 4KB
+          json_obj.value("block_size", size_t(4 * 1024));
       options.block_restart_interval =
-          json_obj.value("block_restart_interval", 16); // Default: 16
+          json_obj.value("block_restart_interval", 16); 
 
-      // Handle compression
       if (json_obj.contains("compression") &&
           json_obj["compression"].is_string()) {
         std::string compression = json_obj["compression"].get<std::string>();
@@ -223,25 +224,27 @@ struct Options {
           return options;
         }
       } else {
-        options.compression = kSnappyCompression; // Default: SnappyCompression
+        options.compression = kSnappyCompression;
       }
 
-      // Handle primary and secondary keys
       options.primary_key = json_obj.value("primary_key", "");
       options.secondary_key = json_obj.value("secondary_key", "");
 
-      // Handle interval tree file name
       options.interval_tree_file_name =
           json_obj.value("interval_tree_file_name", "");
 
-      // Handle filter policy
+      // Load composite indexes
+      if (json_obj.contains("composite_indexes") && json_obj["composite_indexes"].is_array()) {
+        options.composite_indexes = json_obj["composite_indexes"].get<std::vector<std::string>>();
+      }
+
       if (json_obj.contains("filter_policy") &&
           json_obj["filter_policy"].is_string()) {
         std::string filter_policy_name =
             json_obj["filter_policy"].get<std::string>();
         if (filter_policy_name == "leveldb.BuiltinBloomFilter") {
           int bits_per_key = json_obj.value("filter_policy_bits_per_key",
-                                            20); // Default: 20 bits per key
+                                            20);
           options.filter_policy = NewBloomFilterPolicy(bits_per_key);
         } else {
           s = leveldb::Status::InvalidArgument("Unsupported filter policy: " +
@@ -249,10 +252,9 @@ struct Options {
           return options;
         }
       } else {
-        options.filter_policy = nullptr; // Default: no filter policy
+        options.filter_policy = nullptr;
       }
 
-      // Set status to OK if everything is parsed successfully
       s = leveldb::Status::OK();
 
     } catch (const nlohmann::json::exception &e) {
