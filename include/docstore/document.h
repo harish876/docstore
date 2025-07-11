@@ -102,7 +102,7 @@ public:
   // Generic Find Method integrating all other Get/Find Methods
   leveldb::Status Find(const std::string &collection_name,
                        const std::string &field_name,
-                       const std::string &field_value,
+                       const nlohmann::json &field_value,
                        std::vector<nlohmann::json> &matched_records);
   leveldb::Status Get(const std::string &collection_name, std::string key,
                       std::string &value);
@@ -181,7 +181,7 @@ public:
                                const std::string &field_type);
   bool DecodeCompositeKey(const std::string &composite_key,
                           const Catalog *catalog, std::string &id);
-  std::string EncodeFieldValue(const std::string &field_value,
+  std::string EncodeFieldValue(const nlohmann::json &field_value,
                                const std::string &field_type);
 
 private:

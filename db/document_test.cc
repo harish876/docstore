@@ -1263,6 +1263,104 @@ TEST(DocumentStoreTest, CompositeKeyOrderingTest) {
   this->TearDown();
 }
 
+TEST(DocumentStoreTest, CompositeKeyOrderingStringTest) {
+  leveldb::Status s;
+  docstore::DocumentStore store(this->test_dir_, s);
+  ASSERT_TRUE(s.ok());
+
+  leveldb::Options options;
+  options.primary_key = "user_id";
+  std::string seperator = "|";
+
+  class CleanupGuard {
+  public:
+    CleanupGuard(leveldb::Options &opts) : options_(opts) {}
+    ~CleanupGuard() {
+      if (options_.filter_policy) {
+        delete options_.filter_policy;
+        options_.filter_policy = nullptr;
+      }
+    }
+  private:
+    leveldb::Options &options_;
+  };
+  CleanupGuard cleanup(options);
+
+  nlohmann::json schema;
+  schema = R"(
+    {
+      "fields": [
+        {"user_id": "integer"},
+        {"user_name": "string"}
+      ],
+      "required": ["user_id", "user_name"]
+    }
+  )"_json;
+
+  s = store.CreateCollection("users_composite_str", options, schema);
+  ASSERT_TRUE(s.ok());
+
+  std::vector<std::tuple<int32_t, std::string>> test_data = {
+      {1, "Alice"}, {2, "Bob"}, {3, "Alice"}, {4, "Charlie"},
+      {5, "Bob"}, {6, "David"}, {7, "Alice"}, {8, "Eve"},
+  };
+
+  for (const auto &[user_id, name] : test_data) {
+    std::string encoded_id = leveldb::Encoder::EncodeInt32(user_id);
+    // user_name|name|encoded_pk
+    std::string correct_key = "user_name" + seperator + name + seperator + encoded_id;
+    s = store.Insert("users_composite_str", correct_key, "");
+    ASSERT_TRUE(s.ok());
+  }
+
+  // Test 1: Get all users and verify they're ordered by composite key
+  std::vector<std::pair<std::string, std::string>> kv;
+  s = store.GetAll("users_composite_str", kv);
+  ASSERT_TRUE(s.ok());
+
+  for (const auto &user : kv) {
+    std::string key = user.first;
+    size_t pos1 = key.find(seperator);
+    size_t pos2 = key.find(seperator, pos1 + 1);
+
+    if (pos1 != std::string::npos && pos2 != std::string::npos) {
+      std::string name = key.substr(pos1 + 1, pos2 - pos1 - 1);
+      std::string encoded_id = key.substr(pos2 + 1);
+
+      int32_t decoded_id;
+      if (leveldb::Encoder::DecodeInt32(leveldb::Slice(encoded_id), &decoded_id)) {
+        std::cout << "user_name|" << name << "|" << decoded_id << std::endl;
+      }
+    }
+  }
+
+  // Test 2: Prefix search for user_name="Alice"
+  std::string prefixKey = "user_name" + seperator + "Alice" + seperator;
+  std::vector<std::string> matched_keys;
+  s = store.PrefixGet("users_composite_str", prefixKey, matched_keys);
+  ASSERT_TRUE(s.ok());
+  ASSERT_EQ(matched_keys.size(), 3); // Should get 3 users with name="Alice"
+
+  std::cout << "Found " << matched_keys.size() << " users with name=Alice:" << std::endl;
+  for (const auto &key : matched_keys) {
+    std::cout << "Key: " << key << std::endl;
+  }
+
+  // Test 3: Prefix search for user_name="Bob"
+  std::string prefixKey2 = "user_name" + seperator + "Bob" + seperator;
+  matched_keys.clear();
+  s = store.PrefixGet("users_composite_str", prefixKey2, matched_keys);
+  ASSERT_TRUE(s.ok());
+  ASSERT_EQ(matched_keys.size(), 2); // Should get 2 users with name="Bob"
+
+  std::cout << "Found " << matched_keys.size() << " users with name=Bob:" << std::endl;
+  for (const auto &key : matched_keys) {
+    std::cout << "Key: " << key << std::endl;
+  }
+
+  this->TearDown();
+}
+
 TEST(DocumentStoreTest, AddIndexTest) {
   leveldb::Status s;
   docstore::DocumentStore store(this->test_dir_, s);
@@ -1329,7 +1427,8 @@ TEST(DocumentStoreTest, AddIndexTest) {
   ASSERT_TRUE(s.ok());
 
   std::vector<nlohmann::json> matched_records;
-  store.Find("users_indexed", "age", "25", matched_records);
+  const nlohmann::json age_value = 25;
+  store.Find("users_indexed", "age", age_value, matched_records);
   ASSERT_TRUE(s.ok());
   ASSERT_EQ(matched_records.size(), 4);
   for (const auto &record : matched_records) {
@@ -1338,16 +1437,30 @@ TEST(DocumentStoreTest, AddIndexTest) {
   std::cout << "--------------------------------" << std::endl;
 
   matched_records.clear();
-  store.Find("users_indexed", "department_id", "101", matched_records);
+  const nlohmann::json dept_value = 101;
+  store.Find("users_indexed", "department_id", dept_value, matched_records);
   ASSERT_TRUE(s.ok());
   ASSERT_EQ(matched_records.size(), 3);
   for (const auto &record : matched_records) {
     std::cout << "Matched Record: " << record.dump() << std::endl;
   }
   std::cout << "--------------------------------" << std::endl;
+  matched_records.clear();
+  kv.clear();
+
+  const nlohmann::json name_value = "Alice";
+  store.Find("users_indexed", "user_name", name_value, matched_records);
+  store.GetAll("users_indexed", kv);
+  ASSERT_TRUE(s.ok());
+  ASSERT_EQ(matched_records.size(), 1);
+  for (const auto &record : matched_records) {
+    std::cout << "Matched Record: " << record.dump() << std::endl;
+  }
+  std::cout << "--------------------------------" << std::endl;
 
   matched_records.clear();
-  store.Find("users_indexed", "user_id", "1", matched_records);
+  const nlohmann::json id_value = 1;
+  store.Find("users_indexed", "user_id", id_value, matched_records);
   ASSERT_TRUE(s.ok());
   ASSERT_EQ(matched_records.size(), 1);
   for (const auto &record : matched_records) {

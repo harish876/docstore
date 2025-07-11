@@ -581,7 +581,7 @@ DocumentStore::GetByCompositeKey(const std::string &collection_name,
 leveldb::Status
 DocumentStore::Find(const std::string &collection_name,
                     const std::string &field_name,
-                    const std::string &field_value,
+                    const nlohmann::json &field_value,
                     std::vector<nlohmann::json> &matched_records) {
   leveldb::Status s;
   leveldb::DB *db = GetOrCreateDB(collection_name, s);
@@ -595,7 +595,13 @@ DocumentStore::Find(const std::string &collection_name,
 
   if (field_name == catalog->primary_key) {
     std::string document;
-    s = db->Get(leveldb::ReadOptions(), field_value, &document);
+    if (field_value.is_string()) {
+      s = db->Get(leveldb::ReadOptions(), field_value.get<std::string>(), &document);
+    } else if (field_value.is_number_integer()) {
+      s = db->Get(leveldb::ReadOptions(), std::to_string(field_value.get<int32_t>()), &document);
+    } else {
+      return leveldb::Status::InvalidArgument("Invalid field value type");
+    }
     if (!s.ok()) {
       std::cerr << "Failed to get document from collection " << collection_name
                 << ": " << s.ToString() << std::endl;
@@ -605,7 +611,13 @@ DocumentStore::Find(const std::string &collection_name,
   } else if (!catalog->secondary_key.empty() &&
              field_name == catalog->secondary_key) {
     std::vector<leveldb::SecondayKeyReturnVal> value;
-    s = db->Get(leveldb::ReadOptions(), field_value, &value, 1000);
+    if (field_value.is_string()) {
+      s = db->Get(leveldb::ReadOptions(), field_value.get<std::string>(), &value, 1000);
+    } else if (field_value.is_number_integer()) {
+      s = db->Get(leveldb::ReadOptions(), std::to_string(field_value.get<int32_t>()), &value, 1000);
+    } else {
+      return leveldb::Status::InvalidArgument("Invalid field value type");
+    }
 
     if (!s.ok()) {
       std::cerr << "Failed to get document from collection " << collection_name
@@ -617,7 +629,7 @@ DocumentStore::Find(const std::string &collection_name,
     }
   } else if (catalog->required.find(field_name) != catalog->required.end()) {
     auto field_type_it = catalog->fields.find(field_name);
-    
+
     std::string encoded_field_value =
         EncodeFieldValue(field_value, field_type_it->second);
     std::string composite_key_prefix =
@@ -631,13 +643,12 @@ DocumentStore::Find(const std::string &collection_name,
                 << ": " << s.ToString() << std::endl;
       return leveldb::Status::InvalidArgument("Failed to get documents");
     }
-    
-  
+
     std::vector<std::string> composite_keys;
     for (const auto &key : kv_pairs) {
       composite_keys.push_back(key);
     }
-    
+
     s = GetByCompositeKey(db, catalog, composite_keys, matched_records);
     if (!s.ok()) {
       std::cerr << "Failed to get document from collection " << collection_name
@@ -749,13 +760,13 @@ DocumentStore::InsertWithIndex(const std::string &collection_name,
   return s;
 }
 
-std::string DocumentStore::EncodeFieldValue(const std::string &field_value,
+std::string DocumentStore::EncodeFieldValue(const nlohmann::json &field_value,
                                             const std::string &field_type) {
-  if (field_type == "integer") {
-    int32_t int_value = std::stoi(field_value);
+  if (field_type == "integer" && field_value.is_number_integer()) {
+    int32_t int_value = field_value.get<int32_t>();
     return leveldb::IntEncoder::EncodeInt32(int_value);
-  } else if (field_type == "string") {
-    return field_value;
+  } else if (field_type == "string" && field_value.is_string()) {
+    return field_value.get<std::string>();
   } else {
     return "";
   }
@@ -785,8 +796,11 @@ leveldb::Status DocumentStore::AddIndex(const std::string &collection_name,
     const nlohmann::json &field_value = document[catalog->primary_key];
     auto field_type_it = catalog->fields.find(catalog->primary_key);
     if (field_type_it != catalog->fields.end()) {
-      encoded_primary_key_value =
-          EncodeFieldValue(field_value.dump(), field_type_it->second);
+      std::string res = EncodeFieldValue(field_value, field_type_it->second);
+      if (res.empty()) {
+        return leveldb::Status::InvalidArgument("Failed to encode field value");
+      }
+      encoded_primary_key_value = res;
     }
   }
 
@@ -808,7 +822,7 @@ leveldb::Status DocumentStore::AddIndex(const std::string &collection_name,
       continue;
     }
 
-    encoded_field_value = EncodeFieldValue(field_value.dump(), field_type_it->second);
+    encoded_field_value = EncodeFieldValue(field_value, field_type_it->second);
     if (encoded_field_value.empty()) {
       continue;
     }
@@ -880,6 +894,7 @@ leveldb::DB *DocumentStore::GetOrCreateDB(const std::string &collection_name,
   {
     std::lock_guard<std::mutex> lock(collections_mutex_);
     collections_[collection_name] = std::unique_ptr<leveldb::DB>(db);
+    catalog_map_[collection_name] = Catalog(metadata);
     filter_policies_[collection_name] = filter_policy;
   }
 
